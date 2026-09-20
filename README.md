@@ -12,7 +12,7 @@
 ## Установка с выбором компонента
 
 ```bash
-git clone https://github.com/YOUR_ACCOUNT/home-vpn.git
+git clone https://github.com/valuev3000/home-vpn/home-vpn.git
 cd home-vpn
 sudo bash install.sh
 ```
