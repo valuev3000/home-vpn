@@ -1,0 +1,12 @@
+[Unit]
+Description=Create a consistent HOME-VPN backup
+After=vpn-shop.service x-ui.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/home-vpn-backup.env
+ExecStart=/usr/local/sbin/home-vpn-backup
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true

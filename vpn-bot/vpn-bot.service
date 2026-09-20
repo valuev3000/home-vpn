@@ -1,0 +1,17 @@
+[Unit]
+Description=VPN Shop Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vpnshopbot
+Group=vpnshopbot
+EnvironmentFile=/etc/vpn-bot.env
+ExecStart=/usr/bin/python3 /opt/vpn-bot/bot.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

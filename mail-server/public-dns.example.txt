@@ -1,0 +1,10 @@
+Replace EXTERNAL_IP with the public IPv4 address of your mail server.
+
+A     mail.my.domain.ru                  EXTERNAL_IP
+MX    my.domain.ru                       10 mail.my.domain.ru.
+TXT   my.domain.ru                       "v=spf1 ip4:EXTERNAL_IP -all"
+TXT   _dmarc.my.domain.ru                "v=DMARC1; p=none; rua=mailto:support@my.domain.ru; adkim=s; aspf=s"
+TXT   mail._domainkey.my.domain.ru       copy the value from /etc/opendkim/keys/my.domain.ru/mail.txt
+
+PTR/rDNS is configured by the hosting provider:
+EXTERNAL_IP -> mail.my.domain.ru

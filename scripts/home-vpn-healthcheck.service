@@ -1,0 +1,10 @@
+[Unit]
+Description=Check HOME-VPN website health
+After=network-online.target vpn-shop.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/home-vpn-healthcheck
+Nice=10
+NoNewPrivileges=true
+

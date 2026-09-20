@@ -1,0 +1,1 @@
+vpnshop ALL=(root) NOPASSWD: /usr/local/sbin/home-vpn-backup-control *

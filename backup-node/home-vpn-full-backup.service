@@ -1,0 +1,11 @@
+[Unit]
+Description=Create and push portable HOME-VPN node backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/home-vpn-full-backup
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

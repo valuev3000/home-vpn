@@ -1,0 +1,15 @@
+[DEFAULT]
+bantime = 1h
+findtime = 10m
+maxretry = 5
+backend = systemd
+
+[postfix-sasl]
+enabled = true
+port = smtp,465,submission
+filter = postfix[mode=auth]
+
+[dovecot]
+enabled = true
+port = 993
+filter = dovecot

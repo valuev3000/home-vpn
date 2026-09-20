@@ -1,0 +1,19 @@
+[Unit]
+Description=HOME-VPN web application
+After=network-online.target x-ui.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vpnshop
+Group=vpnshop
+EnvironmentFile=/etc/vpn-shop.env
+ExecStart=/usr/bin/python3 /opt/vpn-shop/app.py
+Restart=on-failure
+RestartSec=3
+# The process may invoke one strictly allowlisted root helper through sudo.
+NoNewPrivileges=false
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

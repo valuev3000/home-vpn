@@ -1,0 +1,18 @@
+[Unit]
+Description=HOME-VPN multi-server backup administration panel
+After=network-online.target ssh.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homevpnbackup
+Group=homevpnbackup
+EnvironmentFile=/etc/home-vpn-backup-panel.env
+ExecStart=/usr/bin/python3 /opt/home-vpn-backup-panel/panel.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

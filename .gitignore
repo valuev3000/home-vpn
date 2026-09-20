@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.db
+*.sqlite*
+*.env
+*.log
+*.bak*
+*.pem
+*.key
+*.crt
+.tmp-*
+config/config.json
+nodes.json
+*-report.json
+payment_timers.json
+last_event*

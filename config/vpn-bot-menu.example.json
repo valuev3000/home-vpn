@@ -1,0 +1,17 @@
+{
+  "welcome_title": "Домашняя приватная сеть",
+  "welcome_text": "Добро пожаловать! Здесь можно оформить и продлить доступ, управлять подключениями и обратиться в поддержку.",
+  "order": ["new", "renew", "upgrade", "subscriptions", "link", "support", "site", "instructions", "status", "notifications"],
+  "items": {
+    "new": {"enabled": true, "label": "➕ Купить новую подписку"},
+    "renew": {"enabled": true, "label": "🔄 Продлить подписку"},
+    "upgrade": {"enabled": true, "label": "⬆️ Изменить тариф"},
+    "subscriptions": {"enabled": true, "label": "📋 Подписки и текущие заказы"},
+    "link": {"enabled": true, "label": "🔗 Привязать подписку"},
+    "support": {"enabled": true, "label": "🎫 Поддержка"},
+    "site": {"enabled": true, "label": "🌐 Перейти на сайт"},
+    "instructions": {"enabled": true, "label": "📖 Инструкции по подключению"},
+    "status": {"enabled": true, "label": "🟢 Статус серверов"},
+    "notifications": {"enabled": true, "label": "🔕 Отписаться от уведомлений"}
+  }
+}

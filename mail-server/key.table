@@ -1,0 +1,1 @@
+mail._domainkey.my.domain.ru my.domain.ru:mail:/etc/opendkim/keys/my.domain.ru/mail.private

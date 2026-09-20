@@ -1,0 +1,9 @@
+[Unit]
+Description=Check HOME-VPN backups, disk, TLS and services
+After=home-vpn-backup.service vpn-shop.service x-ui.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/home-vpn-system-check
+Nice=10
+NoNewPrivileges=true

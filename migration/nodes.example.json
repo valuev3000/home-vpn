@@ -1,0 +1,40 @@
+{
+  "central": {
+    "name": "RU-1",
+    "xui_api_url": "https://ru.example.com:2053/your-panel-path",
+    "xui_token_env": "RU_XUI_TOKEN",
+    "inbound_ids": [1, 2, 3, 4],
+    "shop_api_url": "https://vpn.my.domain.ru",
+    "shop_api_secret_env": "SHOP_API_SECRET",
+    "verify_tls": true
+  },
+  "nodes": [
+    {
+      "name": "PL-2",
+      "country": "PL",
+      "xui_api_url": "https://pl.example.com:2053/your-panel-path",
+      "xui_token_env": "PL_XUI_TOKEN",
+      "subscription_url_template": "https://pl-sub.example.com/sub/{subId}",
+      "preferred_legacy_link": false,
+      "verify_tls": true
+    },
+    {
+      "name": "FI-3",
+      "country": "FI",
+      "xui_api_url": "https://fi-1.example.com:2053/your-panel-path",
+      "xui_token_env": "FI1_XUI_TOKEN",
+      "subscription_url_template": "https://fi-1-sub.example.com/sub/{subId}",
+      "preferred_legacy_link": true,
+      "verify_tls": true
+    },
+    {
+      "name": "NODE-4",
+      "country": "SET_ME",
+      "xui_api_url": "https://node-4.example.com:2053/your-panel-path",
+      "xui_token_env": "NODE4_XUI_TOKEN",
+      "subscription_url_template": "https://node-4-sub.example.com/sub/{subId}",
+      "preferred_legacy_link": true,
+      "verify_tls": true
+    }
+  ]
+}

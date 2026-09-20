@@ -1,0 +1,18 @@
+[Unit]
+Description=HOME-VPN Telegram bot administration site
+After=network-online.target vpn-bot.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vpnshopbot
+Group=vpnshopbot
+EnvironmentFile=/etc/vpn-bot-admin.env
+ExecStart=/usr/bin/python3 /opt/vpn-bot/admin.py
+Restart=on-failure
+RestartSec=3
+# The panel may invoke one strictly allowlisted root helper through sudo.
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target

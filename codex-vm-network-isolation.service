@@ -1,0 +1,14 @@
+[Unit]
+Description=Block bridged network access for all Proxmox VMs except VM 200
+Wants=network-online.target
+After=network-online.target pve-firewall.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=-/usr/sbin/nft delete table bridge codex_vm_network_isolation
+ExecStart=/usr/sbin/nft -f /etc/nftables.d/vm-network-isolation.nft
+ExecStop=-/usr/sbin/nft delete table bridge codex_vm_network_isolation
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,20 @@
+[Unit]
+Description=HOME-VPN edge placeholder site
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+EnvironmentFile=/etc/home-vpn-placeholder.env
+ExecStart=/usr/bin/python3 /opt/home-vpn-placeholder/server.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,38 @@
+{
+  "branding": {
+    "name": "HOME-VPN",
+    "tagline": "Домашняя свобода",
+    "subtitle": "Безопасный интернет каждый день"
+  },
+  "pricing": {
+    "currency": "₽",
+    "max_devices": 5,
+    "traffic_gb": 0,
+    "device_monthly": {"1": 100, "2": 190, "3": 280, "4": 370, "5": 460},
+    "periods": {
+      "m1": {"name": "1 месяц", "days": 30, "multiplier": 1},
+      "m3": {"name": "3 месяца", "days": 90, "multiplier": 2.8},
+      "m6": {"name": "6 месяцев", "days": 180, "multiplier": 5.6},
+      "y1": {"name": "1 год", "days": 365, "multiplier": 10}
+    },
+    "trial": {"enabled": true, "name": "Пробный · 3 дня", "days": 3, "price": 0, "devices": 1}
+  },
+  "payment": {"mode": "manual", "provider_name": "Оплата", "url": ""},
+  "nodes": [
+    {
+      "id": "main",
+      "name": "Основная нода",
+      "country": "RU",
+      "flag": "🇷🇺",
+      "primary": true,
+      "enabled": true,
+      "panel_url": "https://127.0.0.1:2053/panel-path",
+      "token_env": "XUI_TOKEN",
+      "inbound_ids": [1, 2, 3, 4],
+      "subscription_base_url": "",
+      "routes": [
+        {"name": "reality", "inbound_id": 1, "protocol": "vless", "transport": "tcp", "enabled": true}
+      ]
+    }
+  ]
+}

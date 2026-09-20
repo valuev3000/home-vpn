@@ -1,0 +1,1 @@
+homevpnbackup ALL=(root) NOPASSWD: /usr/local/sbin/home-vpn-backup-panel-control *

@@ -1,0 +1,1 @@
+vpnshopbot ALL=(root) NOPASSWD: /usr/local/sbin/vpn-bot-admin-control *

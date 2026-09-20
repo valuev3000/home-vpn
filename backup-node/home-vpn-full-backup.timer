@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily portable HOME-VPN node backup
+
+[Timer]
+OnCalendar=*-*-* 04:35:00
+RandomizedDelaySec=20m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
