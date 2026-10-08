@@ -12,7 +12,7 @@ cd home-vpn
 sudo bash install.sh
 ```
 
-Мастер позволяет установить сайт, Telegram-бот, домен/TLS, почту, Backup-сервер и Backup-агент. Секреты сохраняются только в `/etc`.
+Мастер позволяет установить сайт, Telegram-бот, домен/TLS, почту, pull Backup-сервер и read-only exporter узла. Секреты сохраняются только в `/etc`.
 
 После установки:
 
@@ -52,23 +52,19 @@ sudo home-vpn-setup payment
 В админ-панели сайта откройте **Резервные копии**. Один экран показывает:
 
 - локальные архивы и ручное восстановление;
-- состояние локального расписания и Backup-агента;
+- состояние центрального pull-расписания и exporter;
 - подключение к центральному Backup-серверу;
 - кнопку перехода в графическую панель хранилища.
 
-Подключить удалённое хранилище:
-
-```bash
-sudo home-vpn-setup backup-remote
-```
-
-Укажите IP/домен сервера, SSH-порт и URL его закрытой графической панели. На Backup-сервере конфигурация объединяет сайт, бота и ноды одного проекта, но архивы остаются раздельными по серверам.
+Новые удалённые задания создаются в GUI backup-сервера. Production-узел не
+получает ключ доступа к хранилищу. Подробности, off-site и аварийное
+восстановление: [multi-server-backup.md](multi-server-backup.md).
 
 ## Проверка тестов
 
 ```bash
 python3 -m py_compile vpn-shop/app.py vpn-bot/bot.py scripts/home-vpn-setup.py
-python3 -m unittest -q vpn-shop/test_tariff_logic.py vpn-bot/test_payment_timer.py
+python3 -m unittest -q vpn-shop/test_tariff_logic.py vpn-bot/test_payment_timer.py backup-node/test_backup_v2.py
 ```
 
 Перед рабочим запуском обязательно выполните тестовый платёж ЮKassa и тестовое восстановление на отдельной машине.

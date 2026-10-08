@@ -189,19 +189,16 @@ def install(config_path):
     shutil.copy2(ROOT/'vpn-shop/app.py','/opt/vpn-shop/app.py')
     for item in (ROOT/'vpn-shop/static/original').glob('*'):shutil.copy2(item,pathlib.Path('/srv/home-vpn/assets')/item.name)
     shutil.copy2(ROOT/'vpn-shop/vpn-shop.service','/etc/systemd/system/vpn-shop.service')
-    service_files=('home-vpn-backup.service','home-vpn-backup.timer','home-vpn-healthcheck.service','home-vpn-healthcheck.timer','home-vpn-system-check.service','home-vpn-system-check.timer')
-    shutil.copy2(ROOT/'scripts/home-vpn-backup.py','/usr/local/sbin/home-vpn-backup');os.chmod('/usr/local/sbin/home-vpn-backup',0o700)
-    shutil.copy2(ROOT/'scripts/home-vpn-backup-control.py','/usr/local/sbin/home-vpn-backup-control');os.chmod('/usr/local/sbin/home-vpn-backup-control',0o700)
-    restore_alias=pathlib.Path('/usr/local/sbin/home-vpn-restore')
-    restore_alias.unlink(missing_ok=True);restore_alias.symlink_to('/usr/local/sbin/home-vpn-backup-control')
-    shutil.copy2(ROOT/'scripts/home-vpn-backup-sudoers','/etc/sudoers.d/home-vpn-backup');os.chmod('/etc/sudoers.d/home-vpn-backup',0o440)
-    run('visudo','-cf','/etc/sudoers.d/home-vpn-backup')
+    service_files=('home-vpn-healthcheck.service','home-vpn-healthcheck.timer','home-vpn-system-check.service','home-vpn-system-check.timer')
     shutil.copy2(ROOT/'scripts/home-vpn-healthcheck.sh','/usr/local/sbin/home-vpn-healthcheck');os.chmod('/usr/local/sbin/home-vpn-healthcheck',0o700)
     shutil.copy2(ROOT/'scripts/home-vpn-system-check.py','/usr/local/sbin/home-vpn-system-check');os.chmod('/usr/local/sbin/home-vpn-system-check',0o700)
     for service_file in service_files:shutil.copy2(ROOT/'scripts'/service_file,pathlib.Path('/etc/systemd/system')/service_file)
+    if pathlib.Path('/usr/local/bin/kit').exists():
+        shutil.copy2(ROOT/'scripts/home-vpn-kit-backup','/usr/local/sbin/home-vpn-kit-backup');os.chmod('/usr/local/sbin/home-vpn-kit-backup',0o700)
+        for service_file in ('home-vpn-kit-backup.service','home-vpn-kit-backup.timer'):shutil.copy2(ROOT/'scripts'/service_file,pathlib.Path('/etc/systemd/system')/service_file)
     pathlib.Path('/usr/local/share/home-vpn').mkdir(parents=True,exist_ok=True);shutil.copy2(ROOT/'config/config.example.json','/usr/local/share/home-vpn/config.example.json')
     shutil.copy2(__file__,'/usr/local/sbin/home-vpn-setup');os.chmod('/usr/local/sbin/home-vpn-setup',0o750)
-    public=ask('Публичный URL сайта','https://vpn.my.domain.ru');parsed=urlparse(public if '://' in public else 'https://'+public);public_port=parsed.port or (443 if parsed.scheme=='https' else 80)
+    public=ask('Публичный домен или URL сайта','https://vpn.my.domain.ru');public=public if '://' in public else 'https://'+public;public=public.rstrip('/');parsed=urlparse(public);public_port=parsed.port or (443 if parsed.scheme=='https' else 80)
     detected=next(((cert,key) for cert,key in tls_candidates() if pathlib.Path(cert).is_file() and pathlib.Path(key).is_file()),('',''))
     cert=key=''
     if parsed.scheme=='https':
@@ -213,7 +210,7 @@ def install(config_path):
     else:
         reason=f'порт {public_port} уже занят: {occupied}' if occupied else 'для HTTPS не указан сертификат и ключ'
         print('Обнаружен внешний вход ('+reason+'). Сайт останется на 127.0.0.1:8080; настройте уже установленный прокси на этот адрес. Nginx проект не устанавливает.')
-    admin_user=ask('Логин администратора','home-admin');admin_password=ask('Пароль администратора',secrets.token_urlsafe(16),True);test_user=ask('Логин тестового пользователя','test-user');test_password=ask('Пароль тестового пользователя',secrets.token_urlsafe(16),True)
+    admin_user=ask('Логин администратора','home-admin');admin_password=ask('Пароль администратора',secrets.token_urlsafe(16),True)
     bot_mode=os.getenv('HOME_VPN_INSTALL_BOT','ask').lower()
     telegram_token='' if bot_mode in ('0','no','false') else ask('Telegram Bot Token (пусто = не устанавливать бота)','',True)
     telegram_admin_id=ask('Telegram ID администратора бота','0') if telegram_token else '0'
@@ -242,7 +239,7 @@ def install(config_path):
     payment['mode']=payment_mode;yookassa_shop_id=ask('ЮKassa Shop ID','') if payment_mode=='yookassa' else '';yookassa_secret=ask('ЮKassa секретный ключ','',True) if payment_mode=='yookassa' else ''
     if payment_mode=='yookassa' and (not yookassa_shop_id or not yookassa_secret):raise SystemExit('Для автоматической оплаты нужны Shop ID и секретный ключ ЮKassa')
     api_secret=secrets.token_urlsafe(48);admin_entry='/admin-'+secrets.token_urlsafe(8)
-    env={'VPN_SHOP_DB':'/var/lib/vpn-shop/shop.db','HOME_VPN_CONFIG':str(config_path),'APP_ENV':'production','PUBLIC_URL':public,'APP_BIND':'0.0.0.0' if direct else '127.0.0.1','APP_PORT':str(public_port if direct else 8080),'TRUST_PROXY':'0' if direct else '1','SESSION_SECRET':secrets.token_urlsafe(48),'API_SECRET':api_secret,'ADMIN_USER':admin_user,'ADMIN_PASSWORD':admin_password,'ADMIN_ENTRY_PATH':admin_entry,'TEST_USER':test_user,'TEST_PASSWORD':test_password,'TEST_ENTRY_PATH':'/test-'+secrets.token_urlsafe(8),'TELEGRAM_ADMIN_ID':telegram_admin_id or '0','TELEGRAM_BOT_URL':'https://t.me/'+telegram_bot_name.lstrip('@'),'BOT_ADMIN_URL':bot_admin_url,'SMTP_HOST':smtp_host,'SMTP_PORT':smtp_port,'SMTP_USERNAME':smtp_user,'SMTP_PASSWORD':smtp_password,'SMTP_STARTTLS':smtp_starttls,'SMTP_SSL':smtp_ssl,'IMAP_HOST':imap_host,'IMAP_PORT':imap_port,'IMAP_USERNAME':imap_user,'IMAP_PASSWORD':imap_password or smtp_password,'IMAP_SSL':'1','MAIL_FROM':mail_from,'MAIL_REPLY_TO':mail_from,'PAYMENT_URL':'','YOOKASSA_SHOP_ID':yookassa_shop_id,'YOOKASSA_SECRET_KEY':yookassa_secret,'YOOKASSA_API_URL':'https://api.yookassa.ru/v3','YOOKASSA_RETURN_URL':''}
+    env={'VPN_SHOP_DB':'/var/lib/vpn-shop/shop.db','HOME_VPN_CONFIG':str(config_path),'APP_ENV':'production','PUBLIC_URL':public,'APP_BIND':'0.0.0.0' if direct else '127.0.0.1','APP_PORT':str(public_port if direct else 8080),'TRUST_PROXY':'0' if direct else '1','SESSION_SECRET':secrets.token_urlsafe(48),'API_SECRET':api_secret,'MAIL_SETTINGS_KEY':secrets.token_urlsafe(48),'ADMIN_USER':admin_user,'ADMIN_PASSWORD':admin_password,'ADMIN_ENTRY_PATH':admin_entry,'TELEGRAM_ADMIN_ID':telegram_admin_id or '0','TELEGRAM_BOT_URL':'https://t.me/'+telegram_bot_name.lstrip('@'),'BOT_ADMIN_URL':bot_admin_url,'SMTP_HOST':smtp_host,'SMTP_PORT':smtp_port,'SMTP_USERNAME':smtp_user,'SMTP_PASSWORD':smtp_password,'SMTP_STARTTLS':smtp_starttls,'SMTP_SSL':smtp_ssl,'IMAP_HOST':imap_host,'IMAP_PORT':imap_port,'IMAP_USERNAME':imap_user,'IMAP_PASSWORD':imap_password or smtp_password,'IMAP_SSL':'1','MAIL_FROM':mail_from,'MAIL_REPLY_TO':mail_from,'PAYMENT_URL':'','YOOKASSA_SHOP_ID':yookassa_shop_id,'YOOKASSA_SECRET_KEY':yookassa_secret,'YOOKASSA_API_URL':'https://api.yookassa.ru/v3','YOOKASSA_RETURN_URL':''}
     if direct and cert and key:env['TLS_CERT'],env['TLS_KEY']=install_tls_copy(cert,key)
     for node in data.get('nodes') or []:
         token_name=str(node.get('token_env') or ('XUI_TOKEN' if node.get('primary') else str(node.get('id','NODE')).upper().replace('-','_')+'_XUI_TOKEN'))
@@ -260,15 +257,17 @@ def install(config_path):
         run('useradd','--system','--home','/var/lib/vpn-bot','--shell','/usr/sbin/nologin','vpnshopbot',check=False)
         pathlib.Path('/opt/vpn-bot').mkdir(parents=True,exist_ok=True);pathlib.Path('/var/lib/vpn-bot').mkdir(parents=True,exist_ok=True)
         shutil.copy2(ROOT/'vpn-bot/bot.py','/opt/vpn-bot/bot.py');shutil.copy2(ROOT/'vpn-bot/vpn-bot.service','/etc/systemd/system/vpn-bot.service')
+        shutil.copytree(ROOT/'vpn-bot/assets','/opt/vpn-bot/assets',dirs_exist_ok=True)
         shutil.copy2(ROOT/'vpn-bot/admin.py','/opt/vpn-bot/admin.py');shutil.copy2(ROOT/'vpn-bot/admin-control.py','/usr/local/sbin/vpn-bot-admin-control');os.chmod('/usr/local/sbin/vpn-bot-admin-control',0o700)
         shutil.copy2(ROOT/'vpn-bot/vpn-bot-admin.service','/etc/systemd/system/vpn-bot-admin.service');shutil.copy2(ROOT/'vpn-bot/vpn-bot-admin-sudoers','/etc/sudoers.d/vpn-bot-admin');os.chmod('/etc/sudoers.d/vpn-bot-admin',0o440);run('visudo','-cf','/etc/sudoers.d/vpn-bot-admin')
         menu_config=pathlib.Path('/etc/vpn-bot-menu.json')
         if not menu_config.exists():shutil.copy2(ROOT/'config/vpn-bot-menu.example.json',menu_config)
         run('chown','root:vpnshopbot',str(menu_config));os.chmod(menu_config,0o640)
-        bot_env={'TELEGRAM_BOT_TOKEN':telegram_token,'TELEGRAM_ADMIN_ID':telegram_admin_id or '0','TELEGRAM_CHANNEL':telegram_channel,'SHOP_API_URL':'http://127.0.0.1:8080','PUBLIC_BASE_URL':public,'SHOP_API_SECRET':api_secret,'ADMIN_PANEL_URL':public+admin_entry,'BOT_STATE_FILE':'/var/lib/vpn-bot/last_event_v2','PAYMENT_TIMERS_STATE':'/var/lib/vpn-bot/payment_timers.json','BOT_MENU_CONFIG':str(menu_config)}
+        bot_env={'TELEGRAM_BOT_TOKEN':telegram_token,'TELEGRAM_ADMIN_ID':telegram_admin_id or '0','TELEGRAM_CHANNEL':telegram_channel,'SHOP_API_URL':'http://127.0.0.1:8080','PUBLIC_BASE_URL':public,'SHOP_API_SECRET':api_secret,'ADMIN_PANEL_URL':public+admin_entry,'BOT_STATE_FILE':'/var/lib/vpn-bot/last_event_v2','PAYMENT_TIMERS_STATE':'/var/lib/vpn-bot/payment_timers.json','BOT_MENU_CONFIG':str(menu_config),'BOT_RUNTIME_CONFIG':'/var/lib/vpn-bot/runtime.json'}
         write_env(pathlib.Path('/etc/vpn-bot.env'),bot_env);run('chown','-R','vpnshopbot:vpnshopbot','/var/lib/vpn-bot','/opt/vpn-bot')
         write_env(pathlib.Path('/etc/vpn-bot-admin.env'),{'BOT_PANEL_BIND':'127.0.0.1','BOT_PANEL_PORT':'8090','BOT_PANEL_USER':bot_panel_user,'BOT_PANEL_PASSWORD':bot_panel_password,'BOT_PANEL_SECRET':secrets.token_urlsafe(48),'BOT_PANEL_ENTRY_PATH':bot_panel_entry,'BOT_PANEL_SECURE_COOKIE':'1'})
-    run('systemctl','daemon-reload');run('systemctl','enable','--now','vpn-shop');run('systemctl','enable','--now','home-vpn-backup.timer','home-vpn-healthcheck.timer','home-vpn-system-check.timer');run('systemctl','start','home-vpn-backup.service');run('systemctl','start','home-vpn-system-check.service')
+    run('systemctl','daemon-reload');run('systemctl','enable','--now','vpn-shop');run('systemctl','enable','--now','home-vpn-healthcheck.timer','home-vpn-system-check.timer');run('systemctl','start','home-vpn-system-check.service')
+    if pathlib.Path('/usr/local/bin/kit').exists():run('systemctl','enable','--now','home-vpn-kit-backup.timer')
     if telegram_token:run('systemctl','enable','--now','vpn-bot','vpn-bot-admin')
     print('\nHOME-VPN установлен: '+public);print('Редактор: sudo home-vpn-setup configure');print('Проверка: sudo home-vpn-setup doctor')
     if telegram_token:print('Панель бота:',(bot_admin_url.rstrip('/') if bot_admin_url else 'http://127.0.0.1:8090')+bot_panel_entry);print('Логин панели бота:',bot_panel_user);print('Пароль панели бота:',bot_panel_password)
@@ -278,42 +277,13 @@ def doctor(path):
     print('Конфигурация:', 'OK' if not errors else '\n- '+'\n- '.join(errors))
     primary=next((x for x in data.get('nodes',[]) if x.get('primary')),None);print('Основная 3x-ui:',primary.get('name') if primary else 'не задана');print('Узлов:',len(data.get('nodes',[])));print('Тарифов устройств:',len((data.get('pricing') or {}).get('device_monthly',{})))
     if pathlib.Path('/etc/systemd/system/vpn-shop.service').exists():run('systemctl','is-active','vpn-shop',check=False)
-    if pathlib.Path('/etc/systemd/system/home-vpn-backup.timer').exists():run('systemctl','is-active','home-vpn-backup.timer','home-vpn-healthcheck.timer','home-vpn-system-check.timer',check=False)
+    if pathlib.Path('/etc/systemd/system/home-vpn-kit-backup.timer').exists():run('systemctl','is-active','home-vpn-kit-backup.timer','home-vpn-healthcheck.timer','home-vpn-system-check.timer',check=False)
     env_path=pathlib.Path('/etc/vpn-shop.env')
     if env_path.exists():
         values=read_env(env_path);configured=bool(values.get('SMTP_HOST'))
         print('Почтовая регистрация:', 'SMTP настроен' if configured else 'отключена — SMTP_HOST не задан')
         mode=str((data.get('payment') or {}).get('mode') or 'manual');yk=bool(values.get('YOOKASSA_SHOP_ID') and values.get('YOOKASSA_SECRET_KEY'))
         print('Оплата:',('ЮKassa настроена' if yk else 'ЮKassa требует Shop ID и ключ') if mode=='yookassa' else 'ручное подтверждение администратора')
-        print('Backup-панель:',values.get('BACKUP_PANEL_URL') or 'URL не задан')
-
-def backup_remote_setup():
-    if os.geteuid()!=0:raise SystemExit('Запустите через sudo')
-    host=ask('IP или домен backup-сервера')
-    if not host:raise SystemExit('Backup-сервер не указан')
-    port=ask('SSH-порт backup-сервера','22')
-    if not port.isdigit():raise SystemExit('SSH-порт должен быть числом')
-    remote_user=ask('Системный пользователь backup-сервера','homevpnbackup')
-    panel_url=ask('URL графической панели Backup-сервера (необязательно)','')
-    key=pathlib.Path('/root/.ssh/home-vpn-backup');key.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
-    if not key.exists():run('ssh-keygen','-q','-t','ed25519','-N','','-f',str(key))
-    scan=subprocess.run(['ssh-keyscan','-p',port,host],check=True,capture_output=True,text=True).stdout
-    if not scan.strip():raise SystemExit('Не удалось получить SSH-ключ backup-сервера')
-    with tempfile.NamedTemporaryFile('w',delete=False) as temporary:temporary.write(scan);scan_path=temporary.name
-    try:
-        fingerprint=subprocess.run(['ssh-keygen','-lf',scan_path],check=True,capture_output=True,text=True).stdout.strip()
-    finally:os.unlink(scan_path)
-    print('Отпечаток backup-сервера:\n'+fingerprint)
-    if not yes('Отпечаток проверен и соответствует вашему backup-серверу',False):raise SystemExit('Настройка отменена')
-    known=pathlib.Path('/etc/home-vpn-backup-known-hosts');known.write_text(scan,encoding='utf-8');known.chmod(0o600)
-    write_env(pathlib.Path('/etc/home-vpn-backup.env'),{'HOME_VPN_BACKUP_REMOTE':f'{remote_user}@{host}','HOME_VPN_BACKUP_REMOTE_PORT':port,'HOME_VPN_BACKUP_SSH_KEY':str(key),'HOME_VPN_BACKUP_KNOWN_HOSTS':str(known)})
-    shop_env=pathlib.Path('/etc/vpn-shop.env')
-    if shop_env.exists():
-        values=read_env(shop_env);values['BACKUP_PANEL_URL']=panel_url;write_env(shop_env,values);run('systemctl','restart','vpn-shop',check=False)
-    public=key.with_suffix('.pub').read_text(encoding='utf-8').strip()
-    print('\nНа backup-сервере выполните из каталога проекта:\n')
-    print("sudo python3 backup-node/install-backup-node.py --public-key "+repr(public))
-    print('\nПосле этого проверьте отправку: sudo systemctl start home-vpn-backup.service')
 
 def tls_setup():
     if os.geteuid()!=0:raise SystemExit('Запустите через sudo')
@@ -351,12 +321,11 @@ def payment_setup(config_path):
     if mode=='yookassa':print('Webhook для кабинета ЮKassa:',public+'/api/payments/yookassa/webhook')
 
 def main():
-    parser=argparse.ArgumentParser(description='HOME-VPN installer and configuration editor');parser.add_argument('command',choices=('install','configure','tls','payment','backup-remote','validate','show','doctor'));parser.add_argument('--config',type=pathlib.Path,default=SYSTEM_CONFIG);args=parser.parse_args()
+    parser=argparse.ArgumentParser(description='HOME-VPN installer and configuration editor');parser.add_argument('command',choices=('install','configure','tls','payment','validate','show','doctor'));parser.add_argument('--config',type=pathlib.Path,default=SYSTEM_CONFIG);args=parser.parse_args()
     if args.command=='install':install(args.config)
     elif args.command=='configure':configure(args.config);run('systemctl','restart','vpn-shop',check=False) if os.geteuid()==0 else None
     elif args.command=='tls':tls_setup()
     elif args.command=='payment':payment_setup(args.config)
-    elif args.command=='backup-remote':backup_remote_setup()
     elif args.command=='validate':
         errors=validate(load(args.config));print('OK' if not errors else '\n'.join(errors));raise SystemExit(bool(errors))
     elif args.command=='show':print(json.dumps(load(args.config),ensure_ascii=False,indent=2))

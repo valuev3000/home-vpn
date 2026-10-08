@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import html, json, math, os, ssl, time, urllib.request, urllib.parse, urllib.error, uuid
+import hashlib, html, json, math, os, ssl, time, urllib.request, urllib.parse, urllib.error, uuid
 
 TOKEN=os.getenv("TELEGRAM_BOT_TOKEN","")
 SHOP=os.getenv("SHOP_API_URL","http://127.0.0.1:8080").rstrip("/")
@@ -11,9 +11,12 @@ POLL=int(os.getenv("POLL_SECONDS","3"))
 STATE=os.getenv("BOT_STATE_FILE","/var/lib/vpn-bot/last_event_v2")
 PAYMENT_TIMERS_STATE=os.getenv("PAYMENT_TIMERS_STATE","/var/lib/vpn-bot/payment_timers.json")
 MENU_CONFIG=os.getenv("BOT_MENU_CONFIG","/etc/vpn-bot-menu.json")
+COMMANDS_STATE=os.getenv("BOT_COMMANDS_STATE","/var/lib/vpn-bot/commands.sha256")
+PROXY_DISABLE_GUIDE=os.getenv("PROXY_DISABLE_GUIDE","/opt/vpn-bot/assets/proxy-disable-guide.png")
+RUNTIME_CONFIG=os.getenv("BOT_RUNTIME_CONFIG","/var/lib/vpn-bot/runtime.json")
 DEVICE_MONTH={1:100,2:190,3:280,4:370,5:460}
 PERIODS={"m1":("1 месяц",1),"m3":("3 месяца",2.8),"m6":("6 месяцев",5.6),"y1":("1 год",10)}
-CATALOG_CACHE={"value":None,"expires":0}
+CATALOG_CACHE={"value":None}
 MENU_DEFAULT={
     "welcome_title":"Домашняя приватная сеть",
     "welcome_text":"Добро пожаловать! Здесь можно оформить и продлить доступ, управлять подключениями и обратиться в поддержку.",
@@ -36,10 +39,39 @@ LOGIN_WAIT={}
 MAINT_WAIT=set()
 NAME_WAIT=set()
 BUY_TARGET={}
-TEST_USER_SELECTED={}
 TICKET_NEW_WAIT=set()
 TICKET_REPLY_WAIT={}
 PAYMENT_TIMERS={}
+USER_MODE=set()
+DOMAIN_WAIT=set()
+
+def normalize_public_url(value):
+    value=str(value or "").strip().rstrip("/")
+    if "://" not in value:value="https://"+value
+    parsed=urllib.parse.urlparse(value)
+    if parsed.scheme not in ("http","https") or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/") or any(x.isspace() for x in value):
+        raise ValueError("Укажите домен или полный адрес вида https://vpn.example.ru")
+    try:port=parsed.port
+    except ValueError as error:raise ValueError("Некорректный порт") from error
+    host=parsed.hostname
+    if ":" in host and not host.startswith("["):host="["+host+"]"
+    return f"{parsed.scheme}://{host}"+(f":{port}" if port else "")
+
+def load_runtime_public(default):
+    try:
+        with open(RUNTIME_CONFIG,encoding="utf-8") as source:return normalize_public_url(json.load(source).get("public_url") or default)
+    except (OSError,ValueError,TypeError):return normalize_public_url(default)
+
+def save_runtime_public(value):
+    global PUBLIC
+    public=normalize_public_url(value);os.makedirs(os.path.dirname(RUNTIME_CONFIG),exist_ok=True);temporary=RUNTIME_CONFIG+".tmp"
+    with open(temporary,"w",encoding="utf-8") as output:json.dump({"public_url":public},output,ensure_ascii=False,indent=2);output.write("\n")
+    os.chmod(temporary,0o600);os.replace(temporary,RUNTIME_CONFIG);PUBLIC=public;return public
+
+PUBLIC=load_runtime_public(PUBLIC)
+
+class TelegramAPIError(RuntimeError):
+    def __init__(self,message,retry_after=0):super().__init__(message);self.retry_after=max(0,int(retry_after or 0))
 
 def menu_config():
     result=json.loads(json.dumps(MENU_DEFAULT,ensure_ascii=False))
@@ -59,6 +91,17 @@ def menu_config():
 def welcome_text():
     cfg=menu_config();return f"🏠 <b>{html.escape(cfg['welcome_title'])}</b>\n\n{html.escape(cfg['welcome_text'])}"
 
+def login_agreement_text():
+    name=html.escape(brand_name());base=html.escape(PUBLIC,quote=True)
+    return (f"<b>Пользовательское соглашение {name}</b>\n\n"
+            f"Нажимая «Принимаю», вы соглашаетесь на автоматическую регистрацию на сайте {name}. "
+            "Для создания учётной записи будут переданы ваш Telegram ID и имя пользователя. "
+            "Данные используются только для входа, управления подпиской и связи по вашему заказу. "
+            "Не передавайте полученную ссылку входа другим людям.\n\n"
+            f"📄 <a href=\"{base}/terms\">Условия использования</a>\n"
+            f"🔐 <a href=\"{base}/privacy\">Конфиденциальность</a>\n"
+            f"💳 <a href=\"{base}/refund-policy\">Оплата и возвраты</a>")
+
 def tg(method,data=None,files=None):
     url=f"https://api.telegram.org/bot{TOKEN}/{method}"
     if files:
@@ -67,7 +110,30 @@ def tg(method,data=None,files=None):
         for k,(name,content,ctype) in files.items(): body.extend(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"; filename=\"{name}\"\r\nContent-Type: {ctype}\r\n\r\n".encode()+content+b"\r\n")
         body.extend(f"--{boundary}--\r\n".encode()); req=urllib.request.Request(url,bytes(body),headers={"Content-Type":f"multipart/form-data; boundary={boundary}"})
     else: req=urllib.request.Request(url,urllib.parse.urlencode(data or {}).encode())
-    with urllib.request.urlopen(req,timeout=30) as r:return json.loads(r.read())
+    try:
+        with urllib.request.urlopen(req,timeout=30) as r:return json.loads(r.read())
+    except urllib.error.HTTPError as error:
+        try:payload=json.loads(error.read().decode())
+        except Exception:payload={}
+        retry_after=(payload.get("parameters") or {}).get("retry_after",0)
+        description=payload.get("description") or f"Telegram HTTP {error.code}"
+        raise TelegramAPIError(description,retry_after) from None
+
+def configure_commands(user_commands,admin_commands):
+    payload={"token":hashlib.sha256(TOKEN.encode()).hexdigest(),"user":user_commands,"admin_id":ADMIN_ID,"admin":admin_commands}
+    fingerprint=hashlib.sha256(json.dumps(payload,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
+    try:
+        with open(COMMANDS_STATE,encoding="utf-8") as source:
+            if source.read().strip()==fingerprint:return
+    except OSError:pass
+    try:
+        tg("setMyCommands",{"commands":json.dumps(user_commands,ensure_ascii=False),"scope":json.dumps({"type":"default"})})
+        if ADMIN_ID:tg("setMyCommands",{"commands":json.dumps(admin_commands,ensure_ascii=False),"scope":json.dumps({"type":"chat","chat_id":ADMIN_ID})})
+        os.makedirs(os.path.dirname(COMMANDS_STATE),exist_ok=True);temporary=COMMANDS_STATE+".tmp"
+        with open(temporary,"w",encoding="utf-8") as output:output.write(fingerprint+"\n")
+        os.replace(temporary,COMMANDS_STATE)
+    except Exception as error:
+        print("Telegram commands setup deferred:",error,flush=True)
 
 def save_payment_timers():
     os.makedirs(os.path.dirname(PAYMENT_TIMERS_STATE),exist_ok=True)
@@ -128,18 +194,26 @@ def sync_payment_timers():
         elif status=="active":stop_payment_timer(order_id,"✅ <b>Подписка активна</b>\n\nЗаказ находится в разделе «Мои подписки».")
         elif status in ("rejected","canceled","expired","deleted"):stop_payment_timer(order_id)
 
-def catalog():
-    now=time.time()
-    if CATALOG_CACHE["value"] and CATALOG_CACHE["expires"]>now:return CATALOG_CACHE["value"]
+def catalog(user_id=None):
+    suffix=""
+    if user_id is not None:
+        suffix="?telegram_id="+str(int(user_id))
     try:
-        value=api("/api/bot/catalog");CATALOG_CACHE.update(value=value,expires=now+10);return value
-    except Exception:return {"branding":{"name":"HOME-VPN","tagline":"Домашняя свобода","subtitle":"Безопасный интернет каждый день"},"currency":"₽","max_devices":5,"traffic_gb":0,"device_monthly":DEVICE_MONTH,"periods":{k:{"name":v[0],"multiplier":v[1]} for k,v in PERIODS.items()},"trial":{"enabled":True,"name":"Пробный · 3 дня"}}
+        value=api("/api/bot/catalog"+suffix)
+        if user_id is None:CATALOG_CACHE["value"]=value
+        return value
+    except Exception:
+        return CATALOG_CACHE["value"] or {"branding":{"name":"HOME-VPN","tagline":"Домашняя свобода","subtitle":"Безопасный интернет каждый день"},"currency":"₽","max_devices":5,"traffic_gb":0,"device_monthly":DEVICE_MONTH,"periods":{k:{"name":v[0],"multiplier":v[1]} for k,v in PERIODS.items()},"trial":{"enabled":True,"name":"Пробный · 3 дня"}}
 
 def brand_name():return str((catalog().get("branding") or {}).get("name") or "HOME-VPN")
 def brand_tagline():return str((catalog().get("branding") or {}).get("tagline") or "Домашняя свобода")
+def currency():return str(catalog().get("currency") or "₽")
+def catalog_max_devices():
+    cfg=catalog();tariffs=cfg.get("tariffs") or []
+    return max([int(cfg.get("max_devices") or 1)]+[int(item.get("devices") or 1) for item in tariffs])
 
-def keyboard(mode="new"):
-    cfg=catalog();trial=cfg.get("trial") or {};currency=cfg.get("currency","₽");devices_map={int(k):int(v) for k,v in cfg.get("device_monthly",DEVICE_MONTH).items()};periods=cfg.get("periods") or {}
+def keyboard(mode="new",user_id=None):
+    cfg=catalog(user_id);trial=cfg.get("trial") or {};currency=cfg.get("currency","₽");devices_map={int(k):int(v) for k,v in cfg.get("device_monthly",DEVICE_MONTH).items()};periods=cfg.get("periods") or {}
     if cfg.get("tariffs"):
         rows=[]
         for item in cfg["tariffs"]:
@@ -155,8 +229,8 @@ def keyboard(mode="new"):
             rows.append([{"text":f"{name} · {devices} устр. · {price} {currency}","callback_data":f"order:{mode}:"+code}])
     return json.dumps({"inline_keyboard":rows},ensure_ascii=False)
 
-def renew_keyboard(devices):
-    cfg=catalog();currency=cfg.get("currency","₽");devices_map={int(k):int(v) for k,v in cfg.get("device_monthly",DEVICE_MONTH).items()};devices=max(1,min(max(devices_map),int(devices or 1)));rows=[]
+def renew_keyboard(devices,user_id=None):
+    cfg=catalog(user_id);currency=cfg.get("currency","₽");devices_map={int(k):int(v) for k,v in cfg.get("device_monthly",DEVICE_MONTH).items()};devices=max(1,min(max(devices_map),int(devices or 1)));rows=[]
     if cfg.get("tariffs"):
         rows=[[{"text":f"{x['name']} · {x['devices']} устр. · {x['price']} {currency}","callback_data":"order:renew:"+x["code"]}] for x in cfg["tariffs"] if x.get("renewal") and not x.get("trial") and int(x["devices"])==devices]
         rows.append([{"text":"⬅️ Назад","callback_data":"menu:bot"}]);return json.dumps({"inline_keyboard":rows},ensure_ascii=False)
@@ -166,8 +240,8 @@ def renew_keyboard(devices):
     rows.append([{"text":"⬅️ Назад","callback_data":"menu:bot"}])
     return json.dumps({"inline_keyboard":rows},ensure_ascii=False)
 
-def upgrade_keyboard(client):
-    cfg=catalog();currency=cfg.get("currency","₽");devices_map={int(k):int(v) for k,v in cfg.get("device_monthly",DEVICE_MONTH).items()};current=max(1,min(max(devices_map),int(client.get("limitIp") or 1)));remaining=max(0,int(math.ceil((int(client.get("expiryTime") or 0)-int(time.time()*1000))/86400000)));rows=[]
+def upgrade_keyboard(client,user_id=None):
+    cfg=catalog(user_id);currency=cfg.get("currency","₽");devices_map={int(k):int(v) for k,v in cfg.get("device_monthly",DEVICE_MONTH).items()};current=max(1,min(max(devices_map),int(client.get("limitIp") or 1)));remaining=max(0,int(math.ceil((int(client.get("expiryTime") or 0)-int(time.time()*1000))/86400000)));rows=[]
     if cfg.get("tariffs"):
         tariffs=[x for x in cfg["tariffs"] if x.get("renewal") and not x.get("trial")];targets={}
         for item in tariffs:
@@ -201,6 +275,24 @@ def send(chat,text,markup=None):
     if markup:d["reply_markup"]=markup
     return tg("sendMessage",d)
 
+def deliver_emergency_reminders():
+    sent=0
+    for item in api("/api/bot/emergency-reminders").get("reminders",[]):
+        chat=item["telegram_id"];stage=item["stage"]
+        if stage=="ten_minutes":
+            text="⏳ <b>Временный прокси отключится через 10 минут</b>\n\nЗавершите оформление подписки. После окончания доступа Telegram может продолжить показывать старый прокси в настройках."
+            markup=json.dumps({"inline_keyboard":[[{"text":"💳 Оформить подписку","callback_data":"menu:buy"}]]},ensure_ascii=False)
+            send(chat,text,markup)
+        else:
+            caption="🔌 <b>Временный прокси отключён</b>\n\nЕсли Telegram не переключился на обычное подключение, отключите прокси: <b>Настройки → Данные и память → Настройки прокси → Использовать прокси</b>."
+            markup=json.dumps({"inline_keyboard":[[{"text":"💳 Оформить подписку","callback_data":"menu:buy"}],[{"text":"🌐 Открыть сайт","url":PUBLIC}]]},ensure_ascii=False)
+            try:
+                with open(PROXY_DISABLE_GUIDE,"rb") as guide:content=guide.read()
+                tg("sendPhoto",{"chat_id":chat,"caption":caption,"parse_mode":"HTML","reply_markup":markup},{"photo":("proxy-disable-guide.png",content,"image/png")})
+            except OSError:send(chat,caption,markup)
+        api("/api/bot/emergency-reminder-delivered",{"telegram_id":chat,"expires_at":item["expires_at"],"stage":stage});sent+=1
+    return sent
+
 def deliver_maintenance():
     sent=0;failed=0
     for item in api("/api/bot/maintenance-pending").get("items",[]):
@@ -223,20 +315,7 @@ def complete_maintenance(text):
     return sent,failed,result.get("completed",0)
 
 def is_admin(user_id):return bool(ADMIN_ID and int(user_id)==ADMIN_ID)
-
-def selected_test_user(user_id):
-    return TEST_USER_SELECTED.get(int(user_id),"") if is_admin(user_id) else ""
-
-def test_query(user_id):
-    name=selected_test_user(user_id)
-    return "&test_username="+urllib.parse.quote(name) if name else ""
-
-def test_user_menu():
-    users=api(f"/api/bot/test-users?telegram_id={ADMIN_ID}").get("users",[])
-    rows=[[{"text":"👤 "+str(x["username"]),"callback_data":"testuser:"+str(x["username"])}] for x in users]
-    rows.append([{"text":"⚙️ Управление пользователями на сайте","url":PUBLIC+"/admin/test-user"}])
-    rows.append([{"text":"⬅️ Назад","callback_data":"mode:select"}])
-    return users,json.dumps({"inline_keyboard":rows},ensure_ascii=False)
+def acts_as_admin(user_id):return is_admin(user_id) and int(user_id) not in USER_MODE
 
 def profile(user_id):
     try:return api(f"/api/bot/profile?telegram_id={int(user_id)}").get("profile")
@@ -277,13 +356,14 @@ def admin_menu():
         [{"text":"🛠 Технические работы","callback_data":"menu:maintenance"}],
         [{"text":"🎫 Открытые тикеты","callback_data":"tickets:admin"}],
         [{"text":"🟢 Статус серверов","callback_data":"status:show"}],
+        [{"text":"🌐 Домен сайта","callback_data":"settings:domain"}],
         [{"text":"⬅️ Выбрать режим","callback_data":"mode:select"}],
     ]},ensure_ascii=False)
 
 def admin_mode_menu():
     return json.dumps({"inline_keyboard":[
-        [{"text":"⚙️ Я администратор","callback_data":"mode:admin"}],
-        [{"text":"👤 Я пользователь (тест)","callback_data":"mode:user"}],
+        [{"text":"⚙️ Администрирование","callback_data":"mode:admin"}],
+        [{"text":"👤 Обычный пользователь","callback_data":"mode:user"}],
     ]},ensure_ascii=False)
 
 def maintenance_menu():
@@ -318,13 +398,13 @@ def show_ticket_list(chat,tgid,admin=False):
     send(chat,"<b>Открытые тикеты</b>" if admin else "<b>Мои тикеты</b>",json.dumps({"inline_keyboard":rows},ensure_ascii=False))
 
 def show_pending_orders(chat,tgid,admin=False):
-    suffix="&admin=1" if admin else test_query(tgid);items=api(f"/api/bot/pending-orders?telegram_id={tgid}{suffix}").get("orders",[])
+    suffix="&admin=1" if admin else "";items=api(f"/api/bot/pending-orders?telegram_id={tgid}{suffix}").get("orders",[])
     if not items:return send(chat,"✅ Неподтверждённых заказов нет.",admin_menu() if admin else bot_services_menu())
     labels={"pending":"Ожидается оплата","processing":"Оформляется","review":"Ожидается проверка","payment_pending":"ЮKassa обрабатывает платёж","payment_error":"Платёж получен, требуется обработка","error":"Ошибка оформления"};lines=["<b>Неподтверждённые заказы</b>"];rows=[];now=int(time.time())
     for o in items:
         name,devices=plan_info(o["plan"]);kind="Изменение тарифа" if o.get("order_kind")=="upgrade" else ("Продление" if o.get("order_kind")=="renew" else "Новая подписка")
         left=max(0,int(o.get("expires_at") or 0)-now);remaining=f" · осталось {countdown_text(left)}" if o["status"] in ("pending","error") else "";owner=f" · {html.escape(str(o.get('customer') or 'не указан'))}" if admin else ""
-        lines.append(f"\n<b>№{o['id']}</b>{owner}\n{kind} · {name} · {devices} устр. · {o['amount']} ₽\n{labels.get(o['status'],o['status'])}{remaining}")
+        lines.append(f"\n<b>№{o['id']}</b>{owner}\n{kind} · {name} · {devices} устр. · {o['amount']} {html.escape(currency())}\n{labels.get(o['status'],o['status'])}{remaining}")
         if admin and o["status"]=="review":rows.append([{"text":f"✅ №{o['id']} Деньги пришли","callback_data":f"payapprove:{o['id']}"},{"text":"❌ Не поступили","callback_data":f"payreject:{o['id']}"}])
         elif not admin and o["status"] in ("pending","error"):rows.append([{"text":f"💳 Оплатить №{o['id']}","url":o["payment_url"]},{"text":"Открыть","url":o["pay_url"]}])
         elif o["status"]=="review" and o.get("subscription_qr_url"):
@@ -350,10 +430,10 @@ def show_ticket(chat,tgid,ticket_id,admin=False):
     send(chat,"\n".join(lines)[:3900],json.dumps({"inline_keyboard":rows},ensure_ascii=False))
 
 def show_subscriptions(chat,tgid):
-    suffix=test_query(tgid);items=api(f"/api/bot/clients?telegram_id={tgid}{suffix}").get("clients",[])
-    orders=api(f"/api/bot/pending-orders?telegram_id={tgid}{suffix}").get("orders",[])
+    items=api(f"/api/bot/clients?telegram_id={tgid}").get("clients",[])
+    orders=api(f"/api/bot/pending-orders?telegram_id={tgid}").get("orders",[])
     if not items and not orders:return send(chat,"Подписок и текущих заказов пока нет. Если подписка уже есть в программе VPN, отправьте /link и затем её полную ссылку.",bot_services_menu())
-    selected=selected_test_user(tgid);lines=["<b>Мои подписки и текущие заказы</b>"+(f"\nТестовый пользователь: <code>{html.escape(selected)}</code>" if selected else "")];rows=[]
+    lines=["<b>Мои подписки и текущие заказы</b>"];rows=[]
     for x in items:
         until="без ограничения" if not x.get("expiryTime") else time.strftime("%d.%m.%Y",time.localtime(x["expiryTime"]/1000))
         scheduled="".join(f"\n\n⏳ <b>Запланировано изменение</b>\nС {time.strftime('%d.%m.%Y',time.localtime(z['effectiveAt']/1000))}: {z['limitIp']} устройств.\nСсылка подписки останется прежней." for z in x.get("scheduledChanges",[]))
@@ -362,7 +442,7 @@ def show_subscriptions(chat,tgid):
     labels={"pending":"Ожидается оплата","processing":"Оформляется","review":"Ожидается проверка","payment_pending":"ЮKassa обрабатывает платёж","payment_error":"Платёж получен, требуется обработка","error":"Ошибка оформления"};now=int(time.time())
     for o in orders:
         name,devices=plan_info(o["plan"]);kind="Изменение тарифа" if o.get("order_kind")=="upgrade" else ("Продление" if o.get("order_kind")=="renew" else "Новая подписка");left=max(0,int(o.get("expires_at") or 0)-now);remaining=f" · осталось {countdown_text(left)}" if o["status"] in ("pending","error") else ""
-        lines.append(f"\n<b>Заказ №{o['id']}</b>\n{kind} · {name} · {devices} устр. · {o['amount']} ₽\n{labels.get(o['status'],o['status'])}{remaining}")
+        lines.append(f"\n<b>Заказ №{o['id']}</b>\n{kind} · {name} · {devices} устр. · {o['amount']} {html.escape(currency())}\n{labels.get(o['status'],o['status'])}{remaining}")
         if o["status"] in ("pending","error"):rows.append([{"text":f"💳 Оплатить №{o['id']}","url":o["payment_url"]},{"text":"Открыть","url":o["pay_url"]}])
         elif o["status"]=="review" and o.get("subscription_qr_url"):
             rows.append([{"text":f"📷 QR-код №{o['id']}","url":o["subscription_qr_url"]},{"text":"📋 Скопировать","copy_text":{"text":o["subscription_url"]}}])
@@ -409,6 +489,14 @@ def link_subscription(chat,user,text):
 def handle(update):
     if "message" in update:
         m=update["message"]; text=m.get("text",""); chat=m["chat"]["id"]
+        if chat in DOMAIN_WAIT and is_admin(m["from"]["id"]):
+            if text.startswith("/cancel"):
+                DOMAIN_WAIT.discard(chat);send(chat,"Изменение домена отменено.",admin_menu());return
+            try:
+                public=save_runtime_public(text);DOMAIN_WAIT.discard(chat)
+                send(chat,f"✅ <b>Домен сохранён</b>\n\nПользовательские ссылки бота теперь ведут на:\n<code>{html.escape(public)}</code>\n\nВнутренний API и секреты не изменены.",admin_menu())
+            except (ValueError,OSError) as error:send(chat,"⛔ "+html.escape(str(error))+"\nПопробуйте ещё раз или используйте /cancel.")
+            return
         if chat in TICKET_NEW_WAIT:
             if text.startswith("/cancel"):
                 TICKET_NEW_WAIT.discard(chat);send(chat,"Создание тикета отменено.",support_menu());return
@@ -427,7 +515,7 @@ def handle(update):
             if text.startswith("/cancel"):
                 TICKET_REPLY_WAIT.pop(chat,None);send(chat,"Ответ отменён.",admin_menu() if is_admin(m["from"]["id"]) else support_menu());return
             try:
-                x=api("/api/bot/tickets/reply",{"telegram_id":m["from"]["id"],"ticket_id":ticket_id,"message":text});TICKET_REPLY_WAIT.pop(chat,None)
+                x=api("/api/bot/tickets/reply",{"telegram_id":m["from"]["id"],"ticket_id":ticket_id,"message":text,"as_user":not acts_as_admin(m["from"]["id"])});TICKET_REPLY_WAIT.pop(chat,None)
                 send(chat,f"✅ Ответ добавлен в тикет <b>#{ticket_id}</b>.",json.dumps({"inline_keyboard":[[{"text":"Открыть тикет","callback_data":f"ticket:view:{ticket_id}"}]]},ensure_ascii=False))
                 if is_admin(m["from"]["id"]) and int(x.get("telegram_id") or 0)>0:
                     send(x["telegram_id"],f"💬 <b>Поддержка ответила в тикете #{ticket_id}</b>\n\n{html.escape(text[:1500])}",json.dumps({"inline_keyboard":[[{"text":"Открыть тикет","callback_data":f"ticket:view:{ticket_id}"}]]},ensure_ascii=False))
@@ -468,22 +556,33 @@ def handle(update):
                 except Exception:msg="Проверьте логин"
                 send(chat,"⛔ "+html.escape(msg)+"\nПопробуйте ещё раз. Пример: <code>familiaio</code>")
             return
-        if not is_admin(m["from"]["id"]) and not profile(m["from"]["id"]):
+        if text.startswith("/start emergency_"):
+            try:
+                token=text.split("emergency_",1)[1].strip();api("/api/bot/emergency-claim",{"token":token,"telegram_id":m["from"]["id"]})
+                send(chat,"✅ <b>Аварийный прокси привязан</b>\n\nТеперь можно оформить подписку. Без платной подписки повторный аварийный доступ будет доступен через 30 дней.",bot_services_menu())
+            except urllib.error.HTTPError as error:
+                try:message=json.loads(error.read()).get("error","Не удалось привязать доступ")
+                except Exception:message="Не удалось привязать доступ"
+                send(chat,"⛔ "+html.escape(message))
+            return
+        if text.startswith("/start emergency"):
+            try:
+                access=api("/api/bot/emergency-mtproto",{"telegram_id":m["from"]["id"]});link=access["link"]
+                period="без лимита 1 часа, пока действует платная подписка" if access.get("subscriber") else "на 1 час; повторная выдача через 30 дней"
+                markup=json.dumps({"inline_keyboard":[[{"text":"🔗 Подключить MTProto","url":link}],[{"text":"📋 Скопировать ссылку","copy_text":{"text":link}}]]},ensure_ascii=False)
+                send(chat,f"🆘 <b>Аварийный Telegram-доступ</b>\n\nВыдан {period}. Ссылку нельзя передавать другим людям.",markup)
+            except urllib.error.HTTPError as error:
+                try:message=json.loads(error.read()).get("error","Доступ временно недоступен")
+                except Exception:message="Доступ временно недоступен"
+                send(chat,"⛔ "+html.escape(message))
+            return
+        if not acts_as_admin(m["from"]["id"]) and not profile(m["from"]["id"]) and not text.startswith(("/start login_","/start linkaccount_","/start order_")):
             ask_login(chat,text or "/start");return
         if text.startswith("/start login_"):
             nonce=text.split("login_",1)[1].strip()
-            name=html.escape(brand_name())
-            agreement=(f"<b>Пользовательское соглашение {name}</b>\n\n"
-                       f"Нажимая «Принимаю», вы соглашаетесь на автоматическую регистрацию на сайте {name}. "
-                       "Для создания учётной записи будут переданы ваш Telegram ID и имя пользователя. "
-                       "Данные используются только для входа, управления подпиской и связи по вашему заказу. "
-                       "Не передавайте полученную ссылку входа другим людям.\n\n"
-                       f"Условия: {html.escape(PUBLIC)}/terms\n"
-                       f"Конфиденциальность: {html.escape(PUBLIC)}/privacy\n"
-                       f"Оплата и возвраты: {html.escape(PUBLIC)}/refund-policy")
             buttons=json.dumps({"inline_keyboard":[[{"text":"✅ Принимаю и регистрируюсь","callback_data":"agree:"+nonce}],
                                                    [{"text":"Отказаться","callback_data":"decline"}]]},ensure_ascii=False)
-            send(chat,agreement,buttons)
+            send(chat,login_agreement_text(),buttons)
         elif text.startswith("/start linkaccount_"):
             nonce=text.split("linkaccount_",1)[1].strip()
             buttons=json.dumps({"inline_keyboard":[[{"text":"🔗 Объединить аккаунты","callback_data":"linkaccount:"+nonce}],[{"text":"Отмена","callback_data":"decline"}]]},ensure_ascii=False)
@@ -509,7 +608,7 @@ def handle(update):
             if current:send(chat,f"Ваше имя (логин): <b>{html.escape(current['login'])}</b>")
             else:NAME_WAIT.add(chat);send(chat,"Введите имя (логин) от 8 до 32 символов. Обязательны латинские буквы; цифры и дефис разрешены. Например: <code>familiaio</code>")
         elif text.startswith(("/subscriptions","/subs")):show_subscriptions(chat,m["from"]["id"])
-        elif text.startswith("/pending"):show_pending_orders(chat,m["from"]["id"],True) if is_admin(m["from"]["id"]) else show_subscriptions(chat,m["from"]["id"])
+        elif text.startswith("/pending"):show_pending_orders(chat,m["from"]["id"],True) if acts_as_admin(m["from"]["id"]) else show_subscriptions(chat,m["from"]["id"])
         elif text.startswith("/link"):
             proof=text.partition(" ")[2].strip()
             if proof:link_subscription(chat,m["from"],proof)
@@ -521,7 +620,7 @@ def handle(update):
             else:send(chat,welcome+"\n\nВыберите нужное действие:",bot_services_menu())
         elif text.startswith("/buy"):send(chat,f"<b>{html.escape(brand_name())} · Подписки</b>\nВыберите действие:",bot_services_menu())
         elif text.startswith(("/support","/tickets")):
-            if is_admin(m["from"]["id"]):show_ticket_list(chat,m["from"]["id"],True)
+            if acts_as_admin(m["from"]["id"]):show_ticket_list(chat,m["from"]["id"],True)
             else:send(chat,f"<b>Поддержка {html.escape(brand_name())}</b>\nСоздайте новый тикет или откройте историю обращений.",support_menu())
         elif text.startswith("/status"):show_status(chat)
         elif text.startswith(("/unsubscribe","/stop")):
@@ -533,28 +632,26 @@ def handle(update):
         else: send(chat,"Команды: /buy — купить VPN, /subscriptions — мои подписки, /link — привязать существующую подписку, /status — статус, /unsubscribe — отключить напоминания.")
     if "callback_query" in update:
         q=update["callback_query"];data=q.get("data","");chat=q["message"]["chat"]["id"]
-        admin_action=is_admin(q["from"]["id"])
+        admin_action=acts_as_admin(q["from"]["id"])
         if not admin_action and not profile(q["from"]["id"]):
             tg("answerCallbackQuery",{"callback_query_id":q["id"],"text":"Сначала укажите логин"});ask_login(chat,"/start");return
         if data in ("menu:user","mode:user"):
             if not is_admin(q["from"]["id"]):tg("answerCallbackQuery",{"callback_query_id":q["id"],"text":"Только для администратора","show_alert":"true"});return
-            users,markup=test_user_menu();tg("answerCallbackQuery",{"callback_query_id":q["id"]})
-            send(chat,"<b>Выберите тестового пользователя</b>\n\nВсе покупки, продления и подписки будут открыты от имени выбранной учётной записи." if users else "<b>Тестовых пользователей пока нет</b>\n\nСначала добавьте пользователя в административной панели сайта.",markup);return
-        if data.startswith("testuser:"):
-            if not is_admin(q["from"]["id"]):tg("answerCallbackQuery",{"callback_query_id":q["id"],"text":"Только для администратора","show_alert":"true"});return
-            name=data.split(":",1)[1];users,_=test_user_menu();valid={str(x["username"]) for x in users}
-            if name not in valid:tg("answerCallbackQuery",{"callback_query_id":q["id"],"text":"Пользователь не найден","show_alert":"true"});return
-            TEST_USER_SELECTED[int(q["from"]["id"])]=name;BUY_TARGET.pop(q["from"]["id"],None);tg("answerCallbackQuery",{"callback_query_id":q["id"],"text":"Выбран "+name})
-            send(chat,f"<b>Пользовательский режим</b>\nТестовый пользователь: <code>{html.escape(name)}</code>\n\nПокупки и управление подписками выполняются от его имени.",bot_services_menu());return
+            USER_MODE.add(int(q["from"]["id"]));BUY_TARGET.pop(q["from"]["id"],None);tg("answerCallbackQuery",{"callback_query_id":q["id"]});send(chat,"<b>🧪 Отладочный пользовательский режим</b>\nЗаказы, подписки и тарифы связаны с отдельным пользовательским профилем сайта. Административные права в этом режиме не используются.",bot_services_menu());return
         if data in ("menu:admin","mode:admin"):
             if not is_admin(q["from"]["id"]):tg("answerCallbackQuery",{"callback_query_id":q["id"],"text":"Только для администратора","show_alert":"true"});return
-            TEST_USER_SELECTED.pop(int(q["from"]["id"]),None);BUY_TARGET.pop(q["from"]["id"],None);tg("answerCallbackQuery",{"callback_query_id":q["id"]});send(chat,"<b>Административный режим</b>",admin_menu());return
+            USER_MODE.discard(int(q["from"]["id"]));BUY_TARGET.pop(q["from"]["id"],None);tg("answerCallbackQuery",{"callback_query_id":q["id"]});send(chat,"<b>Административный режим</b>",admin_menu());return
         if data=="mode:select":tg("answerCallbackQuery",{"callback_query_id":q["id"]});send(chat,f"<b>{html.escape(brand_name())}</b>\nВыберите режим работы:",admin_mode_menu());return
         if data=="menu:maintenance":
             if not is_admin(q["from"]["id"]):tg("answerCallbackQuery",{"callback_query_id":q["id"],"text":"Только для администратора","show_alert":"true"});return
             tg("answerCallbackQuery",{"callback_query_id":q["id"]});send(chat,"<b>Технические работы</b>\nВыберите тип уведомления:",maintenance_menu());return
+        if data=="settings:domain":
+            if not is_admin(q["from"]["id"]):tg("answerCallbackQuery",{"callback_query_id":q["id"],"text":"Только для администратора","show_alert":"true"});return
+            DOMAIN_WAIT.add(chat);tg("answerCallbackQuery",{"callback_query_id":q["id"]})
+            send(chat,f"<b>Публичный домен сайта</b>\n\nСейчас: <code>{html.escape(PUBLIC)}</code>\n\nОтправьте домен (<code>vpn.example.ru</code>) или полный URL. Для отмены: /cancel")
+            return
         if data=="menu:bot":
-            selected=selected_test_user(q["from"]["id"]);tg("answerCallbackQuery",{"callback_query_id":q["id"]});send(chat,"<b>Оплата и управление в Telegram</b>"+(f"\nТестовый пользователь: <code>{html.escape(selected)}</code>" if selected else "")+"\nВыберите действие:",bot_services_menu());return
+            tg("answerCallbackQuery",{"callback_query_id":q["id"]});send(chat,"<b>Оплата и управление в Telegram</b>\nВыберите действие:",bot_services_menu());return
         if data=="status:show":tg("answerCallbackQuery",{"callback_query_id":q["id"],"text":"Обновляю статус…"});show_status(chat);return
         if data=="menu:buy":tg("answerCallbackQuery",{"callback_query_id":q["id"]});send(chat,"Выберите действие:",bot_services_menu());return
         if data in ("orders:pending","orders:admin"):
@@ -578,7 +675,7 @@ def handle(update):
         if data.startswith("ticket:close:"):
             ticket_id=int(data.rsplit(":",1)[1])
             try:
-                x=api("/api/bot/tickets/close",{"telegram_id":q["from"]["id"],"ticket_id":ticket_id});tg("answerCallbackQuery",{"callback_query_id":q["id"],"text":"Тикет закрыт"});send(chat,f"✅ Тикет <b>#{ticket_id}</b> закрыт.",admin_menu() if is_admin(q["from"]["id"]) else support_menu())
+                x=api("/api/bot/tickets/close",{"telegram_id":q["from"]["id"],"ticket_id":ticket_id,"as_user":not acts_as_admin(q["from"]["id"])});tg("answerCallbackQuery",{"callback_query_id":q["id"],"text":"Тикет закрыт"});send(chat,f"✅ Тикет <b>#{ticket_id}</b> закрыт.",admin_menu() if acts_as_admin(q["from"]["id"]) else support_menu())
                 if is_admin(q["from"]["id"]) and int(x.get("telegram_id") or 0)>0 and int(x["telegram_id"])!=q["from"]["id"]:send(x["telegram_id"],f"✅ Поддержка закрыла тикет <b>#{ticket_id}</b>.")
                 elif ADMIN_ID and not is_admin(q["from"]["id"]):send(ADMIN_ID,f"✅ Пользователь закрыл тикет <b>#{ticket_id}</b>.")
             except urllib.error.HTTPError as e:
@@ -587,25 +684,25 @@ def handle(update):
                 tg("answerCallbackQuery",{"callback_query_id":q["id"],"text":msg,"show_alert":"true"})
             return
         if data=="buy:new":
-            BUY_TARGET.pop(q["from"]["id"],None);tg("answerCallbackQuery",{"callback_query_id":q["id"]});send(chat,"<b>Новая подписка</b>\nБудет создана отдельная подписка и новая ссылка. Выберите тариф:",keyboard("new"));return
+            BUY_TARGET.pop(q["from"]["id"],None);tg("answerCallbackQuery",{"callback_query_id":q["id"]});send(chat,"<b>Новая подписка</b>\nБудет создана отдельная подписка и новая ссылка. Выберите тариф:",keyboard("new",q["from"]["id"]));return
         if data=="buy:renew":
-            items=api(f"/api/bot/clients?telegram_id={q['from']['id']}{test_query(q['from']['id'])}").get("clients",[])
+            items=api(f"/api/bot/clients?telegram_id={q['from']['id']}").get("clients",[])
             if not items:tg("answerCallbackQuery",{"callback_query_id":q["id"],"text":"Нет подписок для продления","show_alert":"true"});return
             rows=[[{"text":"🔄 "+x["email"],"callback_data":"renewselect:"+x["email"]}] for x in items]
             rows.append([{"text":"⬅️ Назад","callback_data":"menu:bot"}]);tg("answerCallbackQuery",{"callback_query_id":q["id"]});send(chat,"Выберите подписку, срок которой нужно увеличить:",json.dumps({"inline_keyboard":rows},ensure_ascii=False));return
         if data.startswith("renewselect:"):
-            email=data.split(":",1)[1];items=api(f"/api/bot/clients?telegram_id={q['from']['id']}{test_query(q['from']['id'])}").get("clients",[]);client=next((x for x in items if x.get("email")==email),None)
+            email=data.split(":",1)[1];items=api(f"/api/bot/clients?telegram_id={q['from']['id']}").get("clients",[]);client=next((x for x in items if x.get("email")==email),None)
             if not client:tg("answerCallbackQuery",{"callback_query_id":q["id"],"text":"Подписка не найдена","show_alert":"true"});return
-            BUY_TARGET[q["from"]["id"]]=email;tg("answerCallbackQuery",{"callback_query_id":q["id"]});send(chat,f"Продление <b>{html.escape(email)}</b>\nКоличество устройств останется прежним: {client.get('limitIp') or 1}. Выберите срок:",renew_keyboard(client.get("limitIp") or 1));return
+            BUY_TARGET[q["from"]["id"]]=email;tg("answerCallbackQuery",{"callback_query_id":q["id"]});send(chat,f"Продление <b>{html.escape(email)}</b>\nКоличество устройств останется прежним: {client.get('limitIp') or 1}. Выберите срок:",renew_keyboard(client.get("limitIp") or 1,q["from"]["id"]));return
         if data=="buy:upgrade":
-            items=api(f"/api/bot/clients?telegram_id={q['from']['id']}{test_query(q['from']['id'])}").get("clients",[]);now=int(time.time()*1000);available=[x for x in items if int(x.get("expiryTime") or 0)>now and int(x.get("limitIp") or 1)<5]
+            items=api(f"/api/bot/clients?telegram_id={q['from']['id']}").get("clients",[]);now=int(time.time()*1000);maximum=catalog_max_devices();available=[x for x in items if int(x.get("expiryTime") or 0)>now and int(x.get("limitIp") or 1)<maximum]
             if not available:tg("answerCallbackQuery",{"callback_query_id":q["id"],"text":"Нет действующих подписок для увеличения тарифа","show_alert":"true"});return
             rows=[[{"text":"⬆️ "+x["email"],"callback_data":"upgradeselect:"+x["email"]}] for x in available];rows.append([{"text":"⬅️ Назад","callback_data":"menu:bot"}]);tg("answerCallbackQuery",{"callback_query_id":q["id"]});send(chat,"Выберите подписку, в которой нужно увеличить количество устройств:",json.dumps({"inline_keyboard":rows},ensure_ascii=False));return
         if data.startswith("upgradeselect:"):
-            email=data.split(":",1)[1];items=api(f"/api/bot/clients?telegram_id={q['from']['id']}{test_query(q['from']['id'])}").get("clients",[]);client=next((x for x in items if x.get("email")==email),None)
+            email=data.split(":",1)[1];items=api(f"/api/bot/clients?telegram_id={q['from']['id']}").get("clients",[]);client=next((x for x in items if x.get("email")==email),None)
             if not client:tg("answerCallbackQuery",{"callback_query_id":q["id"],"text":"Подписка не найдена","show_alert":"true"});return
-            markup,remaining=upgrade_keyboard(client)
-            if remaining<=0 or int(client.get("limitIp") or 1)>=5:tg("answerCallbackQuery",{"callback_query_id":q["id"],"text":"Тариф сейчас нельзя увеличить","show_alert":"true"});return
+            markup,remaining=upgrade_keyboard(client,q["from"]["id"])
+            if remaining<=0 or int(client.get("limitIp") or 1)>=catalog_max_devices():tg("answerCallbackQuery",{"callback_query_id":q["id"],"text":"Тариф сейчас нельзя увеличить","show_alert":"true"});return
             BUY_TARGET[q["from"]["id"]]=email;tg("answerCallbackQuery",{"callback_query_id":q["id"]});send(chat,f"<b>Изменение тарифа {html.escape(email)}</b>\nТекущий лимит: {client.get('limitIp') or 1} устройств. Осталось дней: {remaining}.\nОплачивается только разница за оставшиеся дни; срок и ссылка не изменятся.",markup);return
         if data=="menu:subscriptions":tg("answerCallbackQuery",{"callback_query_id":q["id"]});show_subscriptions(chat,q["from"]["id"]);return
         if data=="menu:link":tg("answerCallbackQuery",{"callback_query_id":q["id"]});LINK_WAIT.add(chat);send(chat,"Пришлите полную ссылку другой существующей подписки из программы VPN.");return
@@ -669,7 +766,11 @@ def handle(update):
                 a=api("/api/bot/telegram-auth",{"nonce":data.split(":",1)[1],"telegram_id":q["from"]["id"],"tg_username":q["from"].get("username","")})
                 result="✅ Аккаунт создан автоматически." if a.get("new_user") else "✅ Аккаунт найден."
                 send(chat,result+"\n\n<b>Оплата и управление в Telegram</b>\nДля одноразового входа используйте кнопку «Перейти на сайт».",bot_services_menu(a["login_url"]))
-            except Exception as e:send(chat,"Не удалось завершить вход. Вернитесь на сайт и нажмите «Войти через Telegram» ещё раз.")
+            except urllib.error.HTTPError as error:
+                try:message=json.loads(error.read()).get("error","Не удалось завершить вход")
+                except Exception:message="Не удалось завершить вход"
+                send(chat,"⛔ "+html.escape(message)+"\n\nВернитесь на сайт и создайте новую ссылку входа.")
+            except Exception:send(chat,"⛔ Сайт временно недоступен. Повторите вход через несколько минут.")
             return
         if data.startswith("linkaccount:"):
             tg("answerCallbackQuery",{"callback_query_id":q["id"],"text":"Объединяем аккаунты…"})
@@ -684,8 +785,8 @@ def handle(update):
         if not data.startswith("order:"):
             tg("answerCallbackQuery",{"callback_query_id":q["id"],"text":"Команда устарела. Откройте меню заново.","show_alert":"true"});return
         _,mode,plan=data.split(":",2);pinfo=profile(q["from"]["id"]) or {};tg("answerCallbackQuery",{"callback_query_id":q["id"]})
-        selected=selected_test_user(q["from"]["id"]);customer=selected or pinfo.get("login") or ("admin-test" if is_admin(q["from"]["id"]) else "@"+q["from"].get("username",""))
-        try:o=api("/api/orders",{"plan":plan,"action":mode,"subscription":BUY_TARGET.get(q["from"]["id"],"") if mode in ("renew","upgrade") else "","telegram_id":q["from"]["id"],"customer":customer,"test_username":selected})
+        customer=pinfo.get("login") or ("administrator" if acts_as_admin(q["from"]["id"]) else "@"+q["from"].get("username",""))
+        try:o=api("/api/orders",{"plan":plan,"action":mode,"subscription":BUY_TARGET.get(q["from"]["id"],"") if mode in ("renew","upgrade") else "","telegram_id":q["from"]["id"],"customer":customer})
         except urllib.error.HTTPError as e:
             try:payload=json.loads(e.read());msg=payload.get("error","Не удалось создать заказ")
             except Exception:payload={};msg="Не удалось создать заказ"
@@ -706,8 +807,8 @@ def handle(update):
                 change_note=f"\nДоплата за оставшиеся дни: {o.get('remaining_days',0)} дн.\nСрок и ссылка подписки не изменятся."
             reference=o.get("payment_reference") or f"№{o['id']}";automatic=o.get("payment_method")=="yookassa"
             term_label="Срок остаётся до" if o.get("action")=="upgrade" else "Новый срок: до"
-            if automatic:base_caption=f"💳 <b>Автоматическая оплата через ЮKassa</b>\n\nЗаказ №{o['id']} · {o['amount']} ₽\n{action}\nУстройства: {o.get('old_limit_ip') or '—'} → {o['new_limit_ip']}\nТекущий срок: {current}\n{term_label} {projected}{change_note}\n\nПосле подтверждения платежа подписка будет выдана автоматически. После начала оплаты отменить заказ нельзя."
-            else:base_caption=f"⚠️ <b>ОБЯЗАТЕЛЬНО УКАЖИТЕ НОМЕР ЗАКАЗА</b>\nПри переводе в поле «Сообщение получателю» или «Комментарий» укажите: <b>{reference}</b>\n\nЗаказ №{o['id']} · {o['amount']} ₽\n{action}\nУстройства: {o.get('old_limit_ip') or '—'} → {o['new_limit_ip']}\nТекущий срок: {current}\n{term_label} {projected}{change_note}\n\nЕсли отправили не ту сумму, не выполняйте повторный перевод — обратитесь в поддержку.\n\nНажмите «Оплатить», чтобы временно активировать подписку и перейти к оплате. Заказ будет отправлен администратору на проверку. После этого отменить его нельзя."
+            if automatic:base_caption=f"💳 <b>Автоматическая оплата через ЮKassa</b>\n\nЗаказ №{o['id']} · {o['amount']} {html.escape(currency())}\n{action}\nУстройства: {o.get('old_limit_ip') or '—'} → {o['new_limit_ip']}\nТекущий срок: {current}\n{term_label} {projected}{change_note}\n\nПосле подтверждения платежа подписка будет выдана автоматически. После начала оплаты отменить заказ нельзя."
+            else:base_caption=f"⚠️ <b>ОБЯЗАТЕЛЬНО УКАЖИТЕ НОМЕР ЗАКАЗА</b>\nПри переводе в поле «Сообщение получателю» или «Комментарий» укажите: <b>{reference}</b>\n\nЗаказ №{o['id']} · {o['amount']} {html.escape(currency())}\n{action}\nУстройства: {o.get('old_limit_ip') or '—'} → {o['new_limit_ip']}\nТекущий срок: {current}\n{term_label} {projected}{change_note}\n\nЕсли отправили не ту сумму, не выполняйте повторный перевод — обратитесь в поддержку.\n\nНажмите «Оплатить», чтобы временно активировать подписку и перейти к оплате. Заказ будет отправлен администратору на проверку. После этого отменить его нельзя."
             caption=f"⏱ <b>До окончания оплаты: {countdown_text(int(o['expires_at'])-int(time.time()))}</b>\n\n{base_caption}"
             buttons=[[{"text":"💳 Оплатить через ЮKassa" if automatic else "💳 Оплатить","url":o["payment_url"]}]]
             if not automatic:buttons.append([{"text":"📋 Скопировать номер заказа","copy_text":{"text":reference}}])
@@ -715,7 +816,7 @@ def handle(update):
             markup=json.dumps({"inline_keyboard":buttons},ensure_ascii=False)
             sent=tg("sendPhoto",{"chat_id":chat,"caption":caption,"parse_mode":"HTML","reply_markup":markup}, {"photo":("payment-qr.png",qr,"image/png")})
             track_payment_timer(o,chat,sent["result"]["message_id"],base_caption,markup)
-        if ADMIN_ID and q["from"]["id"]!=ADMIN_ID: send(ADMIN_ID,f"🆕 Тестовый заказ №{o['id']} · {o['amount']} ₽\nПользователь: {q['from'].get('username') or q['from']['id']}")
+        if ADMIN_ID and q["from"]["id"]!=ADMIN_ID: send(ADMIN_ID,f"🆕 Новый заказ №{o['id']} · {o['amount']} {html.escape(currency())}\nПользователь: {q['from'].get('username') or q['from']['id']}")
 
 def main():
     if not TOKEN: raise SystemExit("Set TELEGRAM_BOT_TOKEN in /etc/vpn-bot.env")
@@ -723,16 +824,14 @@ def main():
     command_items=(("new","buy","Оформить подписку"),("subscriptions","subscriptions","Подписки и текущие заказы"),("support","support","Поддержка и тикеты"),("link","link","Привязать подписку"),("status","status","Статус серверов"),("notifications","unsubscribe","Отключить напоминания"))
     user_commands.extend({"command":command,"description":description} for key,command,description in command_items if enabled[key]["enabled"])
     if enabled["notifications"]["enabled"]:user_commands.append({"command":"subscribe","description":"Включить напоминания"})
-    tg("setMyCommands",{"commands":json.dumps(user_commands,ensure_ascii=False),"scope":json.dumps({"type":"default"})})
-    if ADMIN_ID:
-        admin_commands=[{"command":"start","description":"Выбрать режим"},{"command":"admin","description":"Выбрать режим"},{"command":"pending","description":"Неподтверждённые заказы"},{"command":"tickets","description":"Открытые тикеты"},{"command":"name","description":"Имя и логин подписки"},{"command":"status","description":"Статус серверов"},{"command":"buy","description":"Тест покупки"},{"command":"subscriptions","description":"Тест подписок"}]
-        tg("setMyCommands",{"commands":json.dumps(admin_commands,ensure_ascii=False),"scope":json.dumps({"type":"chat","chat_id":ADMIN_ID})})
+    admin_commands=[{"command":"start","description":"Выбрать режим"},{"command":"admin","description":"Выбрать режим"},{"command":"pending","description":"Неподтверждённые заказы"},{"command":"tickets","description":"Открытые тикеты"},{"command":"name","description":"Имя и логин подписки"},{"command":"status","description":"Статус серверов"},{"command":"buy","description":"Тест покупки"},{"command":"subscriptions","description":"Тест подписок"}]
+    configure_commands(user_commands,admin_commands)
     load_payment_timers();sync_payment_timers();update_payment_timers();offset=0
     try:
         with open(STATE) as f:last_event=int(f.read().strip())
     except Exception:
         last_event=api("/api/bot/events?after=0").get("last_id",0);save_cursor(last_event)
-    last_expiry_check=0;last_maintenance_check=0
+    last_expiry_check=0;last_maintenance_check=0;last_emergency_check=0
     while True:
         try:
             for u in tg("getUpdates",{"offset":offset,"timeout":25,"allowed_updates":json.dumps(["message","callback_query"])})["result"]:
@@ -765,7 +864,7 @@ def main():
                         except Exception:send(e["telegram_id"],caption,markup)
                     if ADMIN_ID:
                         markup=json.dumps({"inline_keyboard":[[{"text":"✅ Деньги пришли","callback_data":f"payapprove:{e['id']}"}],[{"text":"❌ Оплата не поступила","callback_data":f"payreject:{e['id']}"}]]},ensure_ascii=False)
-                        send(ADMIN_ID,f"💳 <b>Пользователь нажал «Оплатить»</b>\nЗаказ: №{e['id']}\nПользователь: {html.escape(str(e.get('customer') or 'не указан'))}\nТариф: {name}\nУстройств: {devices}\nСумма: {e['amount']} ₽\nИмя подписки: <code>{html.escape(e.get('xui_email') or '—')}</code>",markup)
+                        send(ADMIN_ID,f"💳 <b>Пользователь нажал «Оплатить»</b>\nЗаказ: №{e['id']}\nПользователь: {html.escape(str(e.get('customer') or 'не указан'))}\nТариф: {name}\nУстройств: {devices}\nСумма: {e['amount']} {html.escape(currency())}\nИмя подписки: <code>{html.escape(e.get('xui_email') or '—')}</code>",markup)
                 elif kind=="approved":
                     stop_payment_timer(e["id"])
                     if e.get("telegram_id"):
@@ -791,12 +890,15 @@ def main():
             sync_payment_timers();update_payment_timers()
             if time.time()-last_maintenance_check>=30:
                 last_maintenance_check=time.time();deliver_maintenance()
+            if time.time()-last_emergency_check>=60:
+                last_emergency_check=time.time();deliver_emergency_reminders()
             if time.time()-last_expiry_check>=3600:
                 last_expiry_check=time.time()
                 for x in api("/api/bot/expiry-reminders").get("reminders",[]):
                     markup=json.dumps({"inline_keyboard":[[{"text":"💳 Продлить подписку","callback_data":"menu:buy"}],[{"text":"🌐 Оплатить на сайте","url":PUBLIC}],[{"text":"🔕 Отписаться","callback_data":"notifications:off"}]]},ensure_ascii=False)
                     until=time.strftime("%d.%m.%Y",time.localtime(x["expiryTime"]/1000))
                     send(x["telegram_id"],f"⏰ <b>Подписка скоро закончится</b>\nОсталось: {x['days_left']} дн.\nДата окончания: {until}\nПожалуйста, оплатите продление, чтобы VPN продолжил работать.",markup)
-        except Exception as e: print(type(e).__name__,e,flush=True); time.sleep(POLL)
+        except Exception as e:
+            print(type(e).__name__,e,flush=True);time.sleep(max(POLL,e.retry_after if isinstance(e,TelegramAPIError) else 0))
 
 if __name__=="__main__": main()

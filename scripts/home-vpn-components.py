@@ -28,7 +28,9 @@ def write_env(path, values):
 
 
 def install_bot():
-    public = ask("Публичный URL сайта", "https://my.domain.ru")
+    public = ask("Публичный домен или URL сайта", "https://my.domain.ru")
+    if "://" not in public: public = "https://" + public
+    public = public.rstrip("/")
     api = ask("URL API сайта", public)
     secret = ask("API_SECRET с сервера сайта", secret=True)
     token = ask("Telegram Bot Token", secret=True)
@@ -48,6 +50,7 @@ def install_bot():
     subprocess.run(["useradd", "--system", "--home", "/var/lib/vpn-bot", "--shell", "/usr/sbin/nologin", "vpnshopbot"], check=False)
     pathlib.Path("/opt/vpn-bot").mkdir(parents=True, exist_ok=True); pathlib.Path("/var/lib/vpn-bot").mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / "vpn-bot/bot.py", "/opt/vpn-bot/bot.py")
+    shutil.copytree(ROOT / "vpn-bot/assets", "/opt/vpn-bot/assets", dirs_exist_ok=True)
     shutil.copy2(ROOT / "vpn-bot/vpn-bot.service", "/etc/systemd/system/vpn-bot.service")
     shutil.copy2(ROOT / "vpn-bot/admin.py", "/opt/vpn-bot/admin.py")
     shutil.copy2(ROOT / "vpn-bot/admin-control.py", "/usr/local/sbin/vpn-bot-admin-control"); pathlib.Path('/usr/local/sbin/vpn-bot-admin-control').chmod(0o700)
@@ -62,6 +65,7 @@ def install_bot():
         "SHOP_API_URL": api.rstrip("/"), "PUBLIC_BASE_URL": public.rstrip("/"), "SHOP_API_SECRET": secret,
         "ADMIN_PANEL_URL": admin_path, "BOT_STATE_FILE": "/var/lib/vpn-bot/last_event_v2",
         "PAYMENT_TIMERS_STATE": "/var/lib/vpn-bot/payment_timers.json", "BOT_MENU_CONFIG": str(menu_config),
+        "BOT_RUNTIME_CONFIG": "/var/lib/vpn-bot/runtime.json",
     })
     write_env(pathlib.Path("/etc/vpn-bot-admin.env"), {
         "BOT_PANEL_BIND": panel_bind, "BOT_PANEL_PORT": panel_port, "BOT_PANEL_USER": panel_user,
@@ -87,41 +91,14 @@ def install_mail():
     subprocess.run(["bash", str(ROOT / "mail-server/setup-mail-server.sh")], check=True, env=environment)
 
 
-def install_backup_node():
-    print("Используйте отдельный сервер. Рабочие серверы подключаются после установки через GUI.")
-    confirmation = ask("Введите YES для продолжения")
-    if confirmation != "YES": raise SystemExit("Отменено")
-    panel_ip=ask("IP для сертификата панели", "192.168.1.53")
-    panel_host=ask("Публичный домен или IP", "backup.my.domain.ru")
-    panel_bind=ask("Адрес прослушивания", "0.0.0.0")
-    panel_port=ask("HTTPS-порт панели", "9443")
-    if not panel_port.isdigit():raise SystemExit("Порт должен быть числом")
-    run("python3",str(ROOT/"backup-node/install-backup-panel.py"),"--ip",panel_ip,"--public-host",panel_host,"--bind",panel_bind,"--port",panel_port)
-    print("Откройте панель и нажмите «Добавить сервер». Ключи рабочих серверов создаются их backup-агентами.")
-
-
-def install_backup_agent():
-    print("Backup-агент ставится на рабочий сервер и только отправляет копии в хранилище.")
-    server_id=ask("Уникальный ID сервера", "prod-ru")
-    server_name=ask("Понятное название", "Основной RU")
-    role=ask("Роль: site, bot или node", "site").lower()
-    if role not in ("site","bot","node"):raise SystemExit("Допустимые роли: site, bot, node")
-    remote_host=ask("IP или домен backup-сервера", "backup.my.domain.ru")
-    remote_port=ask("SSH-порт backup-сервера", "22")
-    if not remote_port.isdigit():raise SystemExit("SSH-порт должен быть числом")
-    run("python3",str(ROOT/"backup-node/install-full-backup-agent.py"),"--server-id",server_id,"--server-name",server_name,"--role",role,"--remote",f"homevpnbackup@{remote_host}","--port",remote_port)
-
-
 def main():
     if os.geteuid() != 0: raise SystemExit("Запустите через sudo")
     choice = sys.argv[1] if len(sys.argv) > 1 else ""
     if not choice:
-        print("1 — Telegram-бот\n2 — почтовый сервер\n3 — backup-сервер\n4 — backup-агент")
+        print("1 — Telegram-бот\n2 — почтовый сервер")
         choice = ask("Компонент")
     if choice in ("1", "bot"): install_bot()
     elif choice in ("2", "mail"): install_mail()
-    elif choice in ("3", "backup"): install_backup_node()
-    elif choice in ("4", "backup-agent"): install_backup_agent()
     else: raise SystemExit("Неизвестный компонент")
 
 

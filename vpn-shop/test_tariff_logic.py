@@ -30,9 +30,10 @@ class TariffPriceTests(unittest.TestCase):
 
     def test_admin_page_uses_separate_navigation(self):
         document=APP.page('Админ-панель','<p>test</p>',True).decode()
+        self.assertIn('Обзор',document)
         self.assertIn('Пользователи',document)
-        self.assertIn('Проверка оплат',document)
-        self.assertIn('Тестовый пользователь',document)
+        self.assertIn('Оплаты',document)
+        self.assertIn('Поддержка',document)
         self.assertNotIn('Оформление подписки',document)
 
     def test_generated_backup_password_has_required_12_character_format(self):
@@ -305,7 +306,7 @@ class TelegramSiteRegistrationTests(unittest.TestCase):
         APP.API_SECRET=self.original_secret;APP.panel_clients=self.original_panel_clients;APP.send_account_email=self.original_send_account_email;APP.SMTP_HOST=self.original_smtp_host;os.unlink(self.path)
 
     def register(self):
-        body=json.dumps({'telegram_id':987654321,'login':'familia-io','tg_username':'test_user'}).encode()
+        body=json.dumps({'telegram_id':987654321,'login':'familia-io','tg_username':'sample_user'}).encode()
         request=urllib.request.Request(f'http://127.0.0.1:{self.server.server_port}/api/bot/profile',body,headers={'X-API-Key':APP.API_SECRET,'Content-Type':'application/json'})
         with urllib.request.urlopen(request,timeout=3) as response:return json.load(response)
 
@@ -316,7 +317,8 @@ class TelegramSiteRegistrationTests(unittest.TestCase):
 
     def user_cookie(self):
         with APP.db() as connection:
-            row=connection.execute("SELECT username,session_epoch FROM users WHERE role='test'").fetchone()
+            if not connection.execute("SELECT 1 FROM users WHERE username='regular-user'").fetchone():APP.add_user(connection,'regular-user','Strong1!','user')
+            row=connection.execute("SELECT username,session_epoch FROM users WHERE username='regular-user'").fetchone()
         body=APP.base64.urlsafe_b64encode(f'{row[0]}|{int(APP.time.time()+600)}|{row[1] or 0}'.encode()).decode().rstrip('=');signature=APP.hmac.new(APP.SESSION,body.encode(),APP.hashlib.sha256).hexdigest()
         return 'vpn_session='+body+'.'+signature
 
@@ -355,21 +357,6 @@ class TelegramSiteRegistrationTests(unittest.TestCase):
         self.assertNotIn('MailSecret1!',row['smtp_password_enc']);self.assertNotIn('InboxSecret2!',row['imap_password_enc'])
         settings=APP.mail_settings();self.assertEqual(settings['smtp_password'],'MailSecret1!');self.assertEqual(settings['imap_password'],'InboxSecret2!')
 
-    def test_admin_backup_gui_lists_archive_and_queues_creation(self):
-        original=APP.backup_control;calls=[]
-        def fake(*args):
-            calls.append(args)
-            if args==('list',):return {'archives':[{'name':'home-vpn-20260131-120000.tar.gz','size':4096,'created_at':1769850000,'valid':True}],'state':{'status':'success','message':'Резервная копия создана'}}
-            return {'ok':True,'queued':True}
-        APP.backup_control=fake
-        try:
-            connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3)
-            connection.request('GET','/admin/backups',headers={'Cookie':self.admin_cookie()});response=connection.getresponse();content=response.read().decode()
-            self.assertEqual(response.status,200);self.assertIn('home-vpn-20260131-120000.tar.gz',content);self.assertIn('Сайт и 3x-ui',content)
-            connection.request('POST','/admin/backups/create','',{'Content-Type':'application/x-www-form-urlencoded','Cookie':self.admin_cookie()});response=connection.getresponse();response.read();connection.close()
-            self.assertEqual(response.status,303);self.assertIn(('queue-create',),calls)
-        finally:APP.backup_control=original
-
     def test_guest_support_creates_separate_ticket_and_secret_chat_link(self):
         body='name=Guest+User&contact=&message=Please+help+with+VPN'
         connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3);connection.request('POST','/guest-support/create',body,{'Content-Type':'application/x-www-form-urlencoded'});response=connection.getresponse();response.read();location=response.getheader('Location')
@@ -391,48 +378,102 @@ class TelegramSiteRegistrationTests(unittest.TestCase):
     def test_admin_password_is_rejected_on_public_login(self):
         body=f'username={APP.ADMIN}&password={APP.ADMIN_PASSWORD}'
         connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3);connection.request('POST','/login',body,{'Content-Type':'application/x-www-form-urlencoded'});response=connection.getresponse();content=response.read().decode();connection.close()
-        self.assertEqual(response.status,401);self.assertIn('Неправильный логин или пароль',content)
+        self.assertEqual(response.status,401);self.assertIn('Неправильный логин',content)
         self.assertNotIn('Оформление подписки',content);self.assertNotIn('Вход администратора через общую',content)
 
-    def test_test_user_is_rejected_publicly_and_allowed_on_hidden_entry(self):
-        body=f'username={APP.USER}&password={APP.PASSWORD}'
-        connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3)
-        connection.request('POST','/login',body,{'Content-Type':'application/x-www-form-urlencoded'});response=connection.getresponse();content=response.read().decode()
-        self.assertEqual(response.status,401);self.assertIn('Неправильный логин или пароль',content);self.assertIsNone(response.getheader('Set-Cookie'))
-        connection.request('POST',APP.TEST_ENTRY,body,{'Content-Type':'application/x-www-form-urlencoded'});response=connection.getresponse();response.read();connection.close()
-        self.assertEqual(response.status,303);self.assertEqual(response.getheader('Location'),'/');self.assertIn('vpn_session=',response.getheader('Set-Cookie'))
+    def test_user_linked_to_admin_telegram_is_rejected_on_public_login(self):
+        with APP.db() as database:
+            admin=database.execute("SELECT telegram_id FROM users WHERE role='admin'").fetchone()
+            admin_tg=int(admin[0] or APP.ADMIN_TG or 1190339270)
+            database.execute("UPDATE users SET telegram_id=? WHERE role='admin'",(admin_tg,))
+            APP.add_user(database,'linked-user','Strong1!','user')
+            database.execute("UPDATE users SET telegram_id=? WHERE username='linked-user'",(admin_tg,))
+        body='username=linked-user&password=Strong1%21'
+        connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3);connection.request('POST','/login',body,{'Content-Type':'application/x-www-form-urlencoded'});response=connection.getresponse();content=response.read().decode();connection.close()
+        self.assertEqual(response.status,401);self.assertIn('Неправильный логин',content);self.assertIsNone(response.getheader('Set-Cookie'))
 
-    def test_admin_can_create_and_change_multiple_test_users(self):
+    def test_admin_and_user_site_sessions_are_separated(self):
         cookie=self.admin_cookie();connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3)
-        body='action=create&username=second-test&password=Abcdef1%21&password_confirm=Abcdef1%21'
-        connection.request('POST','/admin/test-user',body,{'Content-Type':'application/x-www-form-urlencoded','Cookie':cookie});response=connection.getresponse();response.read()
-        self.assertEqual(response.status,303)
-        with APP.db() as database:
-            created=database.execute("SELECT id FROM users WHERE username='second-test' AND role='test'").fetchone();self.assertIsNotNone(created)
-        body=f'action=update&user_id={created[0]}&username=renamed-test&password=Newpass2%21&password_confirm=Newpass2%21'
-        connection.request('POST','/admin/test-user',body,{'Content-Type':'application/x-www-form-urlencoded','Cookie':cookie});response=connection.getresponse();response.read()
-        self.assertEqual(response.status,303)
-        connection.request('GET',f'/api/bot/test-users?telegram_id={APP.ADMIN_TG}',headers={'X-API-Key':APP.API_SECRET});response=connection.getresponse();payload=json.loads(response.read());connection.close()
-        self.assertEqual(response.status,200);self.assertIn('renamed-test',{x['username'] for x in payload['users']})
-        with APP.db() as database:user=database.execute("SELECT * FROM users WHERE username='renamed-test'").fetchone()
-        self.assertTrue(APP.password_ok(user,'Newpass2!'))
+        connection.request('GET','/',headers={'Cookie':cookie});response=connection.getresponse();response.read()
+        self.assertEqual(response.status,303);self.assertEqual(response.getheader('Location'),'/mode')
+        connection.request('GET','/mode',headers={'Cookie':cookie});response=connection.getresponse();content=response.read().decode();connection.close()
+        self.assertEqual(response.status,200);self.assertIn('Административные права и отладочные данные хранятся раздельно',content);self.assertIn('href=/logout',content)
 
-    def test_bot_order_is_created_for_selected_test_user(self):
-        previous_admin_tg=APP.ADMIN_TG;APP.ADMIN_TG=123456789
+    def test_admin_credentials_open_separate_personal_user_profile(self):
+        cookie=self.admin_cookie();body=f'username={APP.ADMIN}&password={APP.ADMIN_PASSWORD}'
+        connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3)
+        connection.request('GET','/switch/user',headers={'Cookie':cookie});response=connection.getresponse();content=response.read().decode()
+        self.assertEqual(response.status,200);self.assertIn('Логин администратора',content);self.assertIn('action=/switch/user',content)
+        connection.request('POST','/switch/user',body,{'Content-Type':'application/x-www-form-urlencoded','Cookie':cookie});response=connection.getresponse();response.read();user_cookie=response.getheader('Set-Cookie');self.assertEqual(response.status,303);self.assertEqual(response.getheader('Location'),'/')
+        connection.request('GET','/',headers={'Cookie':user_cookie.split(';',1)[0]});response=connection.getresponse();content=response.read().decode();connection.close()
+        self.assertEqual(response.status,200);self.assertNotIn('Админ-панель',content)
         with APP.db() as database:
-            APP.add_user(database,'selected-test','Abcdef1!','test');user_id=database.execute("SELECT id FROM users WHERE username='selected-test'").fetchone()[0]
-        try:
-            payload=json.dumps({'plan':'m1','action':'new','telegram_id':APP.ADMIN_TG,'customer':'selected-test','test_username':'selected-test'}).encode()
-            connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3);connection.request('POST','/api/orders',payload,{'Content-Type':'application/json','X-API-Key':APP.API_SECRET});response=connection.getresponse();result=json.loads(response.read());connection.close()
-            self.assertEqual(response.status,201,result)
-            with APP.db() as database:order=database.execute('SELECT user_id,customer,telegram_id FROM orders WHERE id=?',(result['id'],)).fetchone()
-            self.assertEqual(order['user_id'],user_id);self.assertEqual(order['customer'],'selected-test');self.assertEqual(order['telegram_id'],APP.ADMIN_TG)
-        finally:APP.ADMIN_TG=previous_admin_tg
+            admin=database.execute("SELECT id FROM users WHERE role='admin'").fetchone();profile=database.execute("SELECT role,admin_owner_id FROM users WHERE admin_owner_id=?",(admin['id'],)).fetchone()
+        self.assertEqual(profile['role'],'user');self.assertEqual(profile['admin_owner_id'],admin['id'])
 
-    def test_public_telegram_login_rejects_test_role(self):
+    def test_admin_can_change_credentials_and_both_sessions_are_refreshed(self):
+        cookie=self.admin_cookie();connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3)
+        connection.request('GET','/settings/security',headers={'Cookie':cookie});response=connection.getresponse();content=response.read().decode()
+        self.assertEqual(response.status,200);self.assertIn('Изменить логин администратора',content);self.assertIn('Изменить пароль администратора',content)
+        body=f'new_login=changed-admin&current_password={APP.ADMIN_PASSWORD}'
+        connection.request('POST','/settings/change-login',body,{'Content-Type':'application/x-www-form-urlencoded','Cookie':cookie});response=connection.getresponse();response.read();connection.close()
+        cookies=response.getheaders();set_cookies=[value for key,value in cookies if key.lower()=='set-cookie']
+        self.assertEqual(response.status,303);self.assertEqual(len(set_cookies),2);self.assertTrue(any(x.startswith('vpn_admin_session=') for x in set_cookies))
+        with APP.db() as database:self.assertIsNotNone(database.execute("SELECT 1 FROM users WHERE username='changed-admin' AND role='admin'").fetchone())
+
+    def test_admin_telegram_uses_same_linked_debug_profile_as_site(self):
+        telegram_id=912345678
+        with APP.db() as database:database.execute("UPDATE users SET telegram_id=? WHERE role='admin'",(telegram_id,))
+        connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3)
+        connection.request('GET',f'/api/bot/profile?telegram_id={telegram_id}',headers={'X-API-Key':APP.API_SECRET});response=connection.getresponse();payload=json.loads(response.read());connection.close()
+        self.assertEqual(response.status,200);self.assertTrue(payload['profile']['linked_admin_profile'])
+        with APP.db() as database:
+            admin=database.execute("SELECT id FROM users WHERE role='admin'").fetchone();profile=database.execute("SELECT * FROM users WHERE admin_owner_id=?",(admin['id'],)).fetchone();resolved=APP.user_for_telegram(database,telegram_id)
+        self.assertEqual(payload['profile']['login'],profile['username']);self.assertEqual(resolved['id'],profile['id']);self.assertEqual(profile['role'],'user')
+
+    def test_admin_can_switch_back_from_separate_user_session(self):
+        admin_token=self.admin_cookie().split('=',1)[1];cookies=self.user_cookie()+'; vpn_admin_session='+admin_token
+        connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3)
+        connection.request('GET','/mode',headers={'Cookie':cookies});response=connection.getresponse();content=response.read().decode()
+        self.assertEqual(response.status,200);self.assertIn('отладочный пользовательский режим',content);self.assertIn('href=/switch/admin',content)
+        connection.request('GET','/switch/admin',headers={'Cookie':cookies});response=connection.getresponse();response.read();connection.close()
+        self.assertEqual(response.status,303);self.assertEqual(response.getheader('Location'),'/admin');self.assertIn('vpn_session='+admin_token,response.getheader('Set-Cookie'))
+
+    def test_admin_dashboard_has_mode_entry(self):
+        connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3)
+        connection.request('GET','/admin',headers={'Cookie':self.admin_cookie()});response=connection.getresponse();content=response.read().decode();connection.close()
+        self.assertEqual(response.status,200);self.assertIn('👤 Режим',content);self.assertIn('href=/mode',content)
+
+    def test_login_offers_three_clear_entry_methods(self):
+        connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3)
+        connection.request('GET','/login');response=connection.getresponse();content=response.read().decode();connection.close()
+        self.assertEqual(response.status,200);self.assertIn('class=login-form-panel',content)
+        self.assertIn('class="login-option telegram"',content);self.assertIn('class="login-option emergency"',content)
+        self.assertIn('Логин и пароль',content);self.assertIn('Через Telegram',content);self.assertIn('Telegram не открывается?',content)
+        self.assertIn('Получить временный доступ',content);self.assertIn('Поддержка без входа',content)
+        self.assertNotIn('Как работает аварийный доступ',content)
+
+    def test_tariff_admin_uses_simple_progressive_editor(self):
+        connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3);cookie=self.admin_cookie()
+        connection.request('GET','/admin/tariffs',headers={'Cookie':cookie});response=connection.getresponse();overview=response.read().decode()
+        self.assertEqual(response.status,200);self.assertIn('＋ Новый тариф',overview);self.assertNotIn('action=/admin/tariffs/save',overview)
+        connection.request('GET','/admin/tariffs?new=1',headers={'Cookie':cookie});response=connection.getresponse();editor=response.read().decode();connection.close()
+        self.assertEqual(response.status,200);self.assertIn('action=/admin/tariffs/save',editor);self.assertIn('Дополнительные параметры',editor);self.assertIn('Сразу показать на сайте',editor)
+
+    def test_admin_settings_are_grouped_without_duplicate_tariff_editor(self):
+        connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3);cookie=self.admin_cookie()
+        connection.request('GET','/admin/settings',headers={'Cookie':cookie});response=connection.getresponse();settings=response.read().decode()
+        self.assertEqual(response.status,200);self.assertIn('Тарифы и оплата',settings);self.assertIn('Основные настройки',settings);self.assertIn('Каналы связи',settings);self.assertIn('Служебные функции',settings);self.assertIn('href=/admin/tariffs',settings)
+        self.assertNotIn('/admin/backups',settings);self.assertNotIn('/admin/portable-backup',settings)
+        connection.request('GET','/admin/config',headers={'Cookie':cookie});response=connection.getresponse();service=response.read().decode()
+        connection.request('GET','/admin',headers={'Cookie':cookie});response=connection.getresponse();overview=response.read().decode();connection.close()
+        self.assertNotIn('action=/admin/config/pricing',service);self.assertIn('Сервис и VPN-узлы',service)
+        self.assertNotIn('Основные разделы',overview);self.assertIn('href=/admin/settings',overview)
+
+    def test_public_telegram_login_rejects_admin_role(self):
         now=int(APP.time.time());nonce='test-role-public-login'
         with APP.db() as connection:
-            user=connection.execute("SELECT id FROM users WHERE role='test'").fetchone();connection.execute('UPDATE users SET telegram_id=? WHERE id=?',(7654321,user['id']));connection.execute("INSERT INTO auth_sessions(nonce,status,expires_at) VALUES(?,'pending',?)",(nonce,now+300))
+            user=connection.execute("SELECT id FROM users WHERE role='admin'").fetchone();connection.execute('UPDATE users SET telegram_id=? WHERE id=?',(7654321,user['id']));connection.execute("INSERT INTO auth_sessions(nonce,status,expires_at) VALUES(?,'pending',?)",(nonce,now+300))
         payload=json.dumps({'nonce':nonce,'telegram_id':7654321,'tg_username':'test-account'}).encode()
         connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3);connection.request('POST','/api/bot/telegram-auth',payload,{'Content-Type':'application/json','X-API-Key':APP.API_SECRET});response=connection.getresponse();content=json.loads(response.read());connection.close()
         self.assertEqual(response.status,403);self.assertEqual(content['error'],'Вход через общую форму запрещён')

@@ -1,26 +1,25 @@
 # HOME-VPN
 
-Текущая предварительная версия: **0.0.3-pre**. Инструкция установки и обновления:
-[docs/installation-0.0.3-pre.md](docs/installation-0.0.3-pre.md).
+Текущая предварительная версия: **0.0.4-pre**. Инструкция установки и обновления:
+[docs/installation-0.0.4-pre.md](docs/installation-0.0.4-pre.md).
 
 Самостоятельно размещаемый кабинет для 3x-ui: сайт пользователей, тарифы, заказы, подписки, Telegram-бот, уведомления, тикеты, мониторинг узлов и административная панель.
 
 Полная пошаговая инструкция: [docs/installation.md](docs/installation.md).
 Резервное копирование и восстановление: [docs/backup-and-restore.md](docs/backup-and-restore.md).
-Мультисерверная backup-панель и перенос на новый IP: [docs/multi-server-backup.md](docs/multi-server-backup.md).
+Схема 3X-UI_KIT v1.2: [docs/3x-ui-kit-v1.2.md](docs/3x-ui-kit-v1.2.md).
 
 ## Установка с выбором компонента
 
 ```bash
-git clone https://github.com/valuev3000/home-vpn/home-vpn.git
+git clone https://github.com/valuev3000/home-vpn.git
 cd home-vpn
 sudo bash install.sh
 ```
 
 Мастер обнаруживает установленные компоненты и позволяет установить, обновить,
 перенастроить или полностью удалить сайт, Telegram-бот с собственной защищённой
-панелью, домен/TLS, VLESS XHTTP/REALITY, сайт-заглушку, SMTP/IMAP, backup-сервер
-и отдельный backup-агент каждого рабочего узла.
+панелью, домен/TLS, VLESS XHTTP/REALITY, сайт-заглушку и SMTP/IMAP.
 В документации используются только примеры:
 `192.168.1.50` — ваш IP, `my.domain.ru` — ваш домен.
 
@@ -35,8 +34,8 @@ sudo bash install.sh
    sudo bash install.sh
    ```
 
-4. Выберите действие и компоненты. Сайт, бот, домен/TLS, VLESS, заглушка,
-   почта и backup-сервер устанавливаются независимо.
+4. Выберите действие и компоненты. Сайт, бот, домен/TLS, VLESS, заглушка и
+   почта устанавливаются независимо.
 5. При добавлении ноды сайт запросит API-токен и автоматически получит inbound
    ID, названия маршрутов, протоколы и транспорты. Если нода недоступна,
    сохранится ручная конфигурация.
@@ -47,7 +46,6 @@ sudo bash install.sh
    sudo bash install.sh
    sudo home-vpn-setup configure
    sudo home-vpn-setup tls
-   sudo home-vpn-setup backup-remote
    sudo home-vpn-setup doctor
    ```
 
@@ -112,52 +110,33 @@ python3 migration/migrate_existing_clients.py nodes.json --report before-migrati
 
 ## Обновление
 
-Установщик включает лёгкие системные таймеры:
+На узлах 3x-ui используется резервное копирование 3X-UI_KIT v1.2:
 
-- ежедневная согласованная резервная копия баз сайта и 3x-ui, конфигурации и TLS-файлов;
-- проверка целостности SQLite перед сохранением архива;
-- хранение архивов 14 дней в `/var/backups/home-vpn` с правами только для root;
-- проверка сайта каждые 5 минут с перезапуском только при недоступности `/health`.
-- проверка каждые 6 часов: свободное место, свежесть резервной копии, срок TLS и состояние основных служб; результат доступен администратору без отдельной системы мониторинга.
+- ежедневный архив создаётся штатной командой `kit backup`;
+- перед упаковкой выполняется `PRAGMA integrity_check` базы 3x-ui;
+- архив и SHA-256 сохраняются в `/root` с правами root;
+- архив распаковывается во временный каталог для проверки;
+- срок хранения задаётся через `KIT_BACKUP_RETENTION_DAYS` (по умолчанию 30 дней).
 
 Перед ручным обновлением можно запустить копирование немедленно:
 
 ```bash
-sudo systemctl start home-vpn-backup.service
-sudo systemctl status home-vpn-backup.service
+sudo systemctl start home-vpn-kit-backup.service
+sudo systemctl status home-vpn-kit-backup.service
 ```
 
-Локальная копия защищает от ошибки приложения, но не от потери всего сервера. Для реальной установки каталог `/var/backups/home-vpn` необходимо дополнительно копировать на отдельный сервер или в закрытое объектное хранилище.
-
-### Необязательный отдельный backup-сервер
-
-В `0.0.2` хранилище и агенты устанавливаются как разные компоненты. На
-выделенном backup-сервере запустите мастер и выберите **Backup-сервер и GUI**:
-
-```bash
-sudo bash install.sh
-```
-
-На каждом RU/PL/бот/дополнительном сервере тем же мастером выберите
-**Backup-агент рабочего сервера**. Агент покажет публичный ключ. Вставьте его в
-backup-панели через кнопку **Добавить сервер**, затем запустите первую копию:
-
-```bash
-sudo systemctl start home-vpn-full-backup.service
-sudo systemctl status home-vpn-full-backup.service --no-pager
-```
-
-Backup-аккаунт не получает обычную командную оболочку: SSH принудительно
-запускает только проверяющий приёмник. GUI позволяет добавлять, временно
-отключать, повторно включать и безопасно удалять серверы. Полный порядок:
-[docs/installation-0.0.2.md](docs/installation-0.0.2.md#8-установка-backup-сервера).
+Старая backup-панель, pull-agent и второй backup-сервер удалены. Архив KIT
+локален для узла и не защищает от потери LXC или гипервизора. Экспорт в
+off-site-хранилище следует выполнять средствами Proxmox/NAS без права удаления
+со стороны VPN-узла. Подробности: [docs/backup-and-restore.md](docs/backup-and-restore.md).
 
 После замены файлов выполните `sudo systemctl restart vpn-shop vpn-bot` на соответствующих серверах.
 
 ## Проверка
 
 ```bash
-python3 -m unittest -q vpn-shop/test_tariff_logic.py vpn-bot/test_payment_timer.py migration/test_migrate_existing_clients.py
+python3 -m unittest -q vpn-shop/test_tariff_logic.py vpn-bot/test_payment_timer.py
+PYTHONPATH=migration python3 -m unittest -q migration/test_migrate_existing_clients.py
 python3 scripts/home-vpn-setup.py validate --config config/config.example.json
 ```
 

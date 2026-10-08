@@ -1,6 +1,6 @@
 [Unit]
 Description=Check HOME-VPN backups, disk, TLS and services
-After=home-vpn-backup.service vpn-shop.service x-ui.service
+After=vpn-shop.service x-ui.service home-vpn-kit-backup.service
 
 [Service]
 Type=oneshot

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 import importlib.util
+import importlib.machinery
+import contextlib
+import io
 import json
 import os
 import tempfile
@@ -10,6 +13,8 @@ import unittest
 SPEC = importlib.util.spec_from_file_location("vpn_bot", os.path.join(os.path.dirname(__file__), "bot.py"))
 BOT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BOT)
+ADMIN_LOADER=importlib.machinery.SourceFileLoader("vpn_bot_admin_control",os.path.join(os.path.dirname(__file__),"admin-control.py"))
+ADMIN_SPEC=importlib.util.spec_from_loader("vpn_bot_admin_control",ADMIN_LOADER);ADMIN_CONTROL=importlib.util.module_from_spec(ADMIN_SPEC);ADMIN_LOADER.exec_module(ADMIN_CONTROL)
 
 
 class PaymentTimerTests(unittest.TestCase):
@@ -82,6 +87,97 @@ class PaymentTimerTests(unittest.TestCase):
             self.assertIn("Дом &lt;сеть&gt;",BOT.welcome_text())
         finally:
             BOT.MENU_CONFIG=previous;os.unlink(menu_path)
+
+    def test_command_setup_failure_does_not_stop_bot_startup(self):
+        handle,state=tempfile.mkstemp();os.close(handle);os.unlink(state)
+        previous_state,previous_tg=BOT.COMMANDS_STATE,BOT.tg
+        try:
+            BOT.COMMANDS_STATE=state;BOT.tg=lambda *args,**kwargs:(_ for _ in ()).throw(BOT.TelegramAPIError("Too Many Requests",30))
+            BOT.configure_commands([{"command":"start","description":"Start"}],[])
+            self.assertFalse(os.path.exists(state))
+        finally:
+            BOT.COMMANDS_STATE=previous_state;BOT.tg=previous_tg
+
+
+class SiteCatalogIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        self.original_api=BOT.api;self.original_admin=BOT.ADMIN_ID;BOT.CATALOG_CACHE["value"]=None
+
+    def tearDown(self):
+        BOT.api=self.original_api;BOT.ADMIN_ID=self.original_admin;BOT.CATALOG_CACHE["value"]=None
+
+    def test_catalog_is_requested_each_time_and_last_success_is_fallback(self):
+        calls=[];value={"currency":"€","max_devices":7,"tariffs":[{"devices":7}]}
+        BOT.api=lambda path:calls.append(path) or value
+        self.assertEqual(BOT.catalog()["currency"],"€");self.assertEqual(BOT.catalog_max_devices(),7)
+        self.assertEqual(len(calls),2)
+        BOT.api=lambda path:(_ for _ in ()).throw(OSError("offline"))
+        self.assertEqual(BOT.catalog()["currency"],"€")
+
+    def test_personal_catalog_sends_user_context(self):
+        paths=[];BOT.ADMIN_ID=77
+        BOT.api=lambda path:paths.append(path) or {"tariffs":[]}
+        BOT.catalog(77)
+        self.assertEqual(paths[0],"/api/bot/catalog?telegram_id=77")
+
+
+class AdminNotificationTests(unittest.TestCase):
+    def test_panel_notification_targets_only_configured_administrator(self):
+        original_environment,original_telegram=ADMIN_CONTROL.environment,ADMIN_CONTROL.telegram;calls=[]
+        try:
+            ADMIN_CONTROL.environment=lambda:{"TELEGRAM_ADMIN_ID":"123456","TELEGRAM_CHANNEL":"@must_not_receive"}
+            ADMIN_CONTROL.telegram=lambda values,method,payload:calls.append((method,payload))
+            with contextlib.redirect_stdout(io.StringIO()):ADMIN_CONTROL.notify()
+        finally:
+            ADMIN_CONTROL.environment,ADMIN_CONTROL.telegram=original_environment,original_telegram
+        self.assertEqual(calls,[("sendMessage",{"chat_id":"123456","text":"✅ Тест панели управления ботом HOME-VPN выполнен успешно."})])
+
+
+class EmergencyProxyReminderTests(unittest.TestCase):
+    def setUp(self):
+        self.original_api,self.original_tg,self.original_guide=BOT.api,BOT.tg,BOT.PROXY_DISABLE_GUIDE
+
+    def tearDown(self):
+        BOT.api,BOT.tg,BOT.PROXY_DISABLE_GUIDE=self.original_api,self.original_tg,self.original_guide
+
+    def test_expired_proxy_sends_instruction_and_acknowledges_delivery(self):
+        calls=[];acks=[]
+        def api(path,body=None):
+            if path=="/api/bot/emergency-reminders":return {"reminders":[{"telegram_id":42,"expires_at":100,"stage":"expired"}]}
+            acks.append((path,body));return {"ok":True}
+        BOT.api=api;BOT.tg=lambda method,data=None,files=None:calls.append((method,data,files)) or {"ok":True}
+        BOT.PROXY_DISABLE_GUIDE="/missing/guide.png"
+        self.assertEqual(BOT.deliver_emergency_reminders(),1)
+        self.assertEqual(calls[0][0],"sendMessage");self.assertIn("Настройки прокси",calls[0][1]["text"])
+        self.assertEqual(acks[0][0],"/api/bot/emergency-reminder-delivered")
+
+    def test_ten_minute_warning_has_subscription_button(self):
+        calls=[];BOT.api=lambda path,body=None:{"reminders":[{"telegram_id":7,"expires_at":200,"stage":"ten_minutes"}]} if body is None else {"ok":True}
+        BOT.tg=lambda method,data=None,files=None:calls.append((method,data)) or {"ok":True}
+        BOT.deliver_emergency_reminders()
+        self.assertIn("через 10 минут",calls[0][1]["text"]);self.assertIn("menu:buy",calls[0][1]["reply_markup"])
+
+
+class DomainConfigurationTests(unittest.TestCase):
+    def setUp(self):
+        handle,self.path=tempfile.mkstemp();os.close(handle);os.unlink(self.path)
+        self.original_path,self.original_public=BOT.RUNTIME_CONFIG,BOT.PUBLIC;BOT.RUNTIME_CONFIG=self.path
+
+    def tearDown(self):
+        BOT.RUNTIME_CONFIG,BOT.PUBLIC=self.original_path,self.original_public
+        if os.path.exists(self.path):os.unlink(self.path)
+
+    def test_domain_without_scheme_is_saved_as_https(self):
+        self.assertEqual(BOT.save_runtime_public("vpn.example.ru"),"https://vpn.example.ru")
+        self.assertEqual(BOT.load_runtime_public("https://fallback.example"),"https://vpn.example.ru")
+
+    def test_domain_rejects_paths_and_credentials(self):
+        with self.assertRaises(ValueError):BOT.normalize_public_url("https://user:pass@example.ru/private")
+
+    def test_agreement_uses_separate_html_links(self):
+        BOT.PUBLIC="https://vpn.example.ru";text=BOT.login_agreement_text()
+        self.assertIn('<a href="https://vpn.example.ru/terms">Условия использования</a>',text)
+        self.assertIn('\n🔐 <a href="https://vpn.example.ru/privacy">',text)
 
 
 if __name__ == "__main__":

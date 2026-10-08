@@ -19,19 +19,20 @@ def load_config():
   with open(CONFIG_FILE,encoding='utf-8') as f:data=json.load(f)
   return data if isinstance(data,dict) else DEFAULT_CONFIG
  except (OSError,json.JSONDecodeError):return DEFAULT_CONFIG
+def load_json_file(path,default=None):
+ try:return json.loads(path.read_text(encoding='utf-8'))
+ except (OSError,json.JSONDecodeError):return {} if default is None else default
 CONFIG=load_config();PRICING=CONFIG.get('pricing') or DEFAULT_CONFIG['pricing'];NODES=[x for x in (CONFIG.get('nodes') or []) if isinstance(x,dict) and x.get('enabled',True)];PRIMARY_NODE=next((x for x in NODES if x.get('primary')),NODES[0] if NODES else DEFAULT_CONFIG['nodes'][0])
 PUBLIC=os.getenv('PUBLIC_URL','http://127.0.0.1:8080').rstrip('/'); API_SECRET=os.getenv('API_SECRET','change-me'); SESSION=os.getenv('SESSION_SECRET','change-me').encode(); ADMIN_TG=int(os.getenv('TELEGRAM_ADMIN_ID','0') or 0)
-SMTP_HOST=os.getenv('SMTP_HOST','').strip();SMTP_PORT=int(os.getenv('SMTP_PORT','587') or 587);SMTP_USER=os.getenv('SMTP_USERNAME','').strip();SMTP_PASSWORD=os.getenv('SMTP_PASSWORD','');SMTP_STARTTLS=os.getenv('SMTP_STARTTLS','1')=='1';SMTP_SSL=os.getenv('SMTP_SSL','0')=='1';MAIL_FROM=os.getenv('MAIL_FROM','support@my.domain.ru').strip();MAIL_REPLY_TO=os.getenv('MAIL_REPLY_TO',MAIL_FROM).strip()
-USER=os.getenv('TEST_USER','test-user'); PASSWORD=os.getenv('TEST_PASSWORD','change-me'); ADMIN=os.getenv('ADMIN_USER','home-admin'); ADMIN_PASSWORD=os.getenv('ADMIN_PASSWORD','change-me'); BOT_URL=os.getenv('TELEGRAM_BOT_URL','https://t.me/your_bot');BOT_ADMIN_URL=os.getenv('BOT_ADMIN_URL','').strip(); XURL=(PRIMARY_NODE.get('panel_url') or os.getenv('XUI_URL','')).rstrip('/'); XTOKEN=os.getenv(str(PRIMARY_NODE.get('token_env') or 'XUI_TOKEN'),os.getenv('XUI_TOKEN','')); XIDS=[int(x) for x in (PRIMARY_NODE.get('inbound_ids') or [int(v) for v in os.getenv('XUI_INBOUND_IDS','1').split(',')])]
-BACKUP_PANEL_URL=os.getenv('BACKUP_PANEL_URL','').strip()
+SMTP_HOST=os.getenv('SMTP_HOST','').strip();SMTP_PORT=int(os.getenv('SMTP_PORT','587') or 587);SMTP_USER=os.getenv('SMTP_USERNAME','').strip();SMTP_PASSWORD=os.getenv('SMTP_PASSWORD','');SMTP_STARTTLS=os.getenv('SMTP_STARTTLS','1')=='1';SMTP_SSL=os.getenv('SMTP_SSL','0')=='1';MAIL_FROM=os.getenv('MAIL_FROM','support@my.domain.ru').strip();MAIL_REPLY_TO=os.getenv('MAIL_REPLY_TO',MAIL_FROM).strip();MAIL_SETTINGS_KEY=os.getenv('MAIL_SETTINGS_KEY','').encode()
+ADMIN=os.getenv('ADMIN_USER','home-admin'); ADMIN_PASSWORD=os.getenv('ADMIN_PASSWORD','change-me'); BOT_URL=os.getenv('TELEGRAM_BOT_URL','https://t.me/your_bot');BOT_ADMIN_URL=os.getenv('BOT_ADMIN_URL','').strip(); XURL=(PRIMARY_NODE.get('panel_url') or os.getenv('XUI_URL','')).rstrip('/'); XTOKEN=os.getenv(str(PRIMARY_NODE.get('token_env') or 'XUI_TOKEN'),os.getenv('XUI_TOKEN','')); XIDS=[int(x) for x in (PRIMARY_NODE.get('inbound_ids') or [int(v) for v in os.getenv('XUI_INBOUND_IDS','1').split(',')])]
+MTPROTO_INBOUND_ID=int(os.getenv('MTPROTO_INBOUND_ID','0') or 0);MTPROTO_PUBLIC_HOST=os.getenv('MTPROTO_PUBLIC_HOST','').strip();MTPROTO_PUBLIC_PORT=int(os.getenv('MTPROTO_PUBLIC_PORT','0') or 0);MTPROTO_XUI_URL=os.getenv('MTPROTO_XUI_URL','').rstrip('/');MTPROTO_XUI_TOKEN=os.getenv(os.getenv('MTPROTO_XUI_TOKEN_ENV','PL_XUI_TOKEN'),'');MTPROTO_GUEST_SECONDS=3600;MTPROTO_COOLDOWN_SECONDS=30*86400
 BRANDING=CONFIG.get('branding') or DEFAULT_CONFIG['branding'];BRAND_NAME=str(BRANDING.get('name') or 'HOME-VPN');BRAND_TAGLINE=str(BRANDING.get('tagline') or 'Домашняя свобода');BRAND_SUBTITLE=str(BRANDING.get('subtitle') or 'Безопасный интернет каждый день')
 PAYMENT=CONFIG.get('payment') or {};PAYMENT_URL=(str(PAYMENT.get('url') or '') or os.getenv('PAYMENT_URL','')).strip();PAYMENT_PROVIDER=str(PAYMENT.get('provider_name') or 'Оплата');PAYMENT_PROVIDER='Оплата' if PAYMENT_PROVIDER=='Оплата по инструкции администратора' else PAYMENT_PROVIDER
 YOOKASSA_SHOP_ID=os.getenv('YOOKASSA_SHOP_ID','').strip();YOOKASSA_SECRET_KEY=os.getenv('YOOKASSA_SECRET_KEY','');YOOKASSA_API_URL=os.getenv('YOOKASSA_API_URL','https://api.yookassa.ru/v3').rstrip('/');YOOKASSA_RETURN_URL=os.getenv('YOOKASSA_RETURN_URL','').strip();YOOKASSA_LOCK=threading.Lock()
 PRIMARY_NODE_NAME=str(PRIMARY_NODE.get('name') or 'Основная нода');PRIMARY_NODE_FLAG=str(PRIMARY_NODE.get('flag') or '🌐')
 ADMIN_ENTRY=os.getenv('ADMIN_ENTRY_PATH','/home-vpn-control').strip() or '/home-vpn-control'
 if not ADMIN_ENTRY.startswith('/'):ADMIN_ENTRY='/'+ADMIN_ENTRY
-TEST_ENTRY=os.getenv('TEST_ENTRY_PATH','/home-vpn-test').strip() or '/home-vpn-test'
-if not TEST_ENTRY.startswith('/'):TEST_ENTRY='/'+TEST_ENTRY
 PAYMENT_WINDOW=600
 DEVICE_MONTH={int(k):int(v) for k,v in (PRICING.get('device_monthly') or {}).items()};MAX_DEVICES=max(DEVICE_MONTH) if DEVICE_MONTH else 1;TRAFFIC_GB=max(0,int(PRICING.get('traffic_gb') or 0));CURRENCY=str(PRICING.get('currency') or '₽')
 PERIODS={k:(str(v.get('name') or k),int(v.get('days') or 30),float(v.get('multiplier') or 1)) for k,v in (PRICING.get('periods') or {}).items()}
@@ -79,6 +80,11 @@ def save_runtime_config(data):
  with open(temporary,'w',encoding='utf-8') as stream:json.dump(data,stream,ensure_ascii=False,indent=2);stream.write('\n')
  os.chmod(temporary,0o660);os.replace(temporary,CONFIG_FILE)
 def db(): c=sqlite3.connect(DB);c.row_factory=sqlite3.Row;return c
+def admin_telegram_id():
+ try:
+  with db() as c:row=c.execute("SELECT telegram_id FROM users WHERE role='admin' ORDER BY id LIMIT 1").fetchone()
+  return int(row['telegram_id']) if row and row['telegram_id'] else ADMIN_TG
+ except Exception:return ADMIN_TG
 def init():
  os.makedirs(os.path.dirname(DB),exist_ok=True)
  with db() as c:
@@ -88,6 +94,9 @@ def init():
   c.execute("CREATE TABLE IF NOT EXISTS site_notification_reads(user_id INTEGER NOT NULL,notification_key TEXT NOT NULL,read_at INTEGER NOT NULL,PRIMARY KEY(user_id,notification_key))")
   c.execute("CREATE TABLE IF NOT EXISTS bot_profiles(telegram_id INTEGER PRIMARY KEY,login TEXT UNIQUE NOT NULL,tg_username TEXT,created_at INTEGER)")
   c.execute("CREATE TABLE IF NOT EXISTS site_trial_claims(user_id INTEGER PRIMARY KEY,order_id INTEGER,claimed_at INTEGER)")
+  c.execute("CREATE TABLE IF NOT EXISTS emergency_mtproto(telegram_id INTEGER PRIMARY KEY,client_email TEXT UNIQUE NOT NULL,first_issued_at INTEGER NOT NULL,last_issued_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,cooldown_until INTEGER NOT NULL,subscriber INTEGER NOT NULL DEFAULT 0)")
+  c.execute("CREATE TABLE IF NOT EXISTS emergency_mtproto_web(device_hash TEXT PRIMARY KEY,ip_hash TEXT NOT NULL,claim_token TEXT UNIQUE NOT NULL,client_email TEXT UNIQUE NOT NULL,issued_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,cooldown_until INTEGER NOT NULL,telegram_id INTEGER)")
+  c.execute("CREATE TABLE IF NOT EXISTS emergency_proxy_reminders(telegram_id INTEGER NOT NULL,expires_at INTEGER NOT NULL,stage TEXT NOT NULL,delivered_at INTEGER NOT NULL,PRIMARY KEY(telegram_id,expires_at,stage))")
   c.execute("CREATE TABLE IF NOT EXISTS scheduled_changes(order_id INTEGER PRIMARY KEY,email TEXT NOT NULL,limit_ip INTEGER NOT NULL,effective_at INTEGER NOT NULL,applied_at INTEGER)")
   c.execute("CREATE TABLE IF NOT EXISTS support_tickets(id INTEGER PRIMARY KEY AUTOINCREMENT,telegram_id INTEGER NOT NULL,customer TEXT,status TEXT NOT NULL DEFAULT 'open',created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,closed_at INTEGER)")
   c.execute("CREATE TABLE IF NOT EXISTS support_messages(id INTEGER PRIMARY KEY AUTOINCREMENT,ticket_id INTEGER NOT NULL,sender TEXT NOT NULL,message TEXT NOT NULL,created_at INTEGER NOT NULL)")
@@ -120,6 +129,7 @@ def init():
   if 'twofa_enabled' not in ucols:c.execute("ALTER TABLE users ADD COLUMN twofa_enabled INTEGER DEFAULT 0")
   if 'session_epoch' not in ucols:c.execute("ALTER TABLE users ADD COLUMN session_epoch INTEGER DEFAULT 0")
   if 'blocked_at' not in ucols:c.execute("ALTER TABLE users ADD COLUMN blocked_at INTEGER")
+  if 'admin_owner_id' not in ucols:c.execute("ALTER TABLE users ADD COLUMN admin_owner_id INTEGER")
   if 'user_id' not in ocols:c.execute("ALTER TABLE orders ADD COLUMN user_id INTEGER")
   if 'email' not in ocols:c.execute("ALTER TABLE orders ADD COLUMN email TEXT")
   if 'tg_username' not in ocols:c.execute("ALTER TABLE orders ADD COLUMN tg_username TEXT")
@@ -159,14 +169,10 @@ def init():
    if not c.execute('SELECT 1 FROM users WHERE username=?',(ADMIN,)).fetchone():add_user(c,ADMIN,ADMIN_PASSWORD,'admin')
    c.execute("UPDATE users SET role='admin' WHERE username=?",(ADMIN,));admin=c.execute('SELECT * FROM users WHERE username=?',(ADMIN,)).fetchone()
   if ADMIN_TG and not c.execute('SELECT 1 FROM users WHERE telegram_id=? AND id<>?',(ADMIN_TG,admin['id'])).fetchone():c.execute('UPDATE users SET telegram_id=COALESCE(telegram_id,?) WHERE id=?',(ADMIN_TG,admin['id']))
-  test_user=c.execute("SELECT * FROM users WHERE role='test' ORDER BY id LIMIT 1").fetchone()
-  if not test_user and USER and USER!=admin['username']:
-   existing=c.execute('SELECT * FROM users WHERE username=?',(USER,)).fetchone()
-   if not existing:add_user(c,USER,PASSWORD,'test')
-   elif existing['role']!='admin':c.execute("UPDATE users SET role='test' WHERE id=?",(existing['id'],))
   c.execute('DELETE FROM security_events WHERE created_at<?',(int(time.time())-90*86400,))
   c.execute('DELETE FROM email_tokens WHERE expires_at<? OR used_at IS NOT NULL',(int(time.time())-7*86400,))
   c.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users(lower(email)) WHERE email IS NOT NULL AND email<>''")
+  c.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_admin_owner_unique ON users(admin_owner_id) WHERE admin_owner_id IS NOT NULL")
 def valid_email_address(value):
  value=str(value or '').strip().lower()
  if len(value)>254 or value.count('@')!=1:return False
@@ -175,12 +181,16 @@ def valid_email_address(value):
 def email_token_hash(token):return hmac.new(SESSION,('email:'+str(token)).encode(),hashlib.sha256).hexdigest()
 def create_email_token(c,user_id,purpose,ttl=3600):
  token=secrets.token_urlsafe(32);now=int(time.time());c.execute('DELETE FROM email_tokens WHERE user_id=? AND purpose=? AND used_at IS NULL',(user_id,purpose));c.execute('INSERT INTO email_tokens(user_id,purpose,token_hash,expires_at,created_at) VALUES(?,?,?,?,?)',(user_id,purpose,email_token_hash(token),now+ttl,now));return token
-def mail_cipher():
+def mail_cipher(key=None):
  from cryptography.fernet import Fernet
- return Fernet(base64.urlsafe_b64encode(hashlib.sha256(SESSION+b':mail-settings').digest()))
-def encrypt_mail_secret(value):return mail_cipher().encrypt(str(value or '').encode()).decode() if value else ''
+ material=key if key is not None else (MAIL_SETTINGS_KEY or SESSION+b':mail-settings')
+ return Fernet(base64.urlsafe_b64encode(hashlib.sha256(material).digest()))
+def encrypt_mail_secret(value):return ('v2:'+mail_cipher(MAIL_SETTINGS_KEY).encrypt(str(value).encode()).decode()) if value and MAIL_SETTINGS_KEY else (mail_cipher().encrypt(str(value).encode()).decode() if value else '')
 def decrypt_mail_secret(value):
- try:return mail_cipher().decrypt(str(value or '').encode()).decode() if value else ''
+ try:
+  value=str(value or '')
+  if value.startswith('v2:'):return mail_cipher(MAIL_SETTINGS_KEY).decrypt(value[3:].encode()).decode() if MAIL_SETTINGS_KEY else ''
+  return mail_cipher(SESSION+b':mail-settings').decrypt(value.encode()).decode() if value else ''
  except Exception:return ''
 def payment_credentials():
  with db() as c:row=c.execute('SELECT * FROM payment_settings WHERE id=1').fetchone()
@@ -278,6 +288,23 @@ def security_event(event_type,username=None,ip_address=None,details=None):
 def add_user(c,user,password,role='user',email=None):
  salt=secrets.token_bytes(16);pw=hashlib.scrypt(password.encode(),salt=salt,n=16384,r=8,p=1);c.execute('INSERT INTO users(username,salt,pwhash,role,created_at) VALUES(?,?,?,?,?)',(user,base64.b64encode(salt).decode(),base64.b64encode(pw).decode(),role,int(time.time())))
  if email:c.execute('UPDATE users SET email=? WHERE username=?',(email.lower(),user))
+def admin_user_profile(c,admin):
+ row=c.execute("SELECT * FROM users WHERE admin_owner_id=? AND role='user'",(admin['id'],)).fetchone()
+ if row:return row
+ username=f"personal-{admin['id']}"
+ suffix=1
+ while c.execute('SELECT 1 FROM users WHERE username=?',(username,)).fetchone():suffix+=1;username=f"personal-{admin['id']}-{suffix}"
+ add_user(c,username,secrets.token_urlsafe(32),'user');c.execute('UPDATE users SET admin_owner_id=? WHERE username=?',(admin['id'],username))
+ return c.execute('SELECT * FROM users WHERE username=?',(username,)).fetchone()
+def user_for_telegram(c,telegram_id,create_admin_profile=False):
+ try:telegram_id=int(telegram_id or 0)
+ except (TypeError,ValueError):return None
+ if not telegram_id:return None
+ admin=c.execute("SELECT * FROM users WHERE role='admin' AND telegram_id=?",(telegram_id,)).fetchone()
+ if admin:
+  profile=c.execute("SELECT * FROM users WHERE role='user' AND admin_owner_id=?",(admin['id'],)).fetchone()
+  return profile or (admin_user_profile(c,admin) if create_admin_profile else None)
+ return c.execute("SELECT * FROM users WHERE role<>'admin' AND telegram_id=?",(telegram_id,)).fetchone()
 def generated_password(length=12):
  if length<4:raise ValueError('password length must be at least 4')
  chars=[secrets.choice('abcdefghijkmnopqrstuvwxyz'),secrets.choice('ABCDEFGHJKLMNPQRSTUVWXYZ'),secrets.choice('23456789'),secrets.choice('!@#$%*-_')]
@@ -359,6 +386,10 @@ def node_xapi(node,method,path,body=None):
  if not token:raise RuntimeError('На сервере сайта не задана переменная '+str(node.get('token_env') or 'с API-токеном'))
  req=urllib.request.Request(url+path,data=json.dumps(body).encode() if body is not None else None,method=method,headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
  with urllib.request.urlopen(req,context=ssl._create_unverified_context(),timeout=15) as response:return json.loads(response.read())
+def mtproto_xapi(method,path,body=None):
+ if not MTPROTO_XUI_URL or not MTPROTO_XUI_TOKEN:raise RuntimeError('API MTProto-ноды не настроен')
+ req=urllib.request.Request(MTPROTO_XUI_URL+path,data=json.dumps(body).encode() if body is not None else None,method=method,headers={'Authorization':'Bearer '+MTPROTO_XUI_TOKEN,'Content-Type':'application/json'})
+ with urllib.request.urlopen(req,context=ssl._create_unverified_context(),timeout=15) as response:return json.loads(response.read())
 def discover_node_routes(node):
  result=node_xapi(node,'GET','/panel/api/inbounds/list');items=result.get('obj') or []
  if not result.get('success',True):raise RuntimeError(str(result.get('msg') or '3x-ui вернула ошибку'))
@@ -403,6 +434,80 @@ def client_payload(client):
  if isinstance(out.get('allowedIPs'),str):out['allowedIPs']=[x.strip() for x in out['allowedIPs'].split(',') if x.strip()]
  out['id']=str(client.get('uuid') or client.get('id') or '')
  return out
+def paid_subscription_expiry(telegram_id):
+ now_ms=int(time.time()*1000)
+ with db() as c:
+  paid=c.execute("SELECT 1 FROM orders WHERE telegram_id=? AND status='active' AND COALESCE(plan_trial,0)=0 LIMIT 1",(int(telegram_id),)).fetchone()
+ if not paid:return None
+ expiries=[]
+ try:
+  for client in account_clients(telegram_id=telegram_id):
+   value=int(client.get('expiryTime') or 0)
+   if value==0:return 0
+   if value>now_ms:expiries.append(value)
+ except Exception:pass
+ return max(expiries) if expiries else None
+def emergency_mtproto_access(telegram_id):
+ telegram_id=int(telegram_id or 0);now=int(time.time())
+ if telegram_id<=0:raise ValueError('Некорректный Telegram ID')
+ if not (MTPROTO_INBOUND_ID and MTPROTO_PUBLIC_HOST and 1<=MTPROTO_PUBLIC_PORT<=65535):raise RuntimeError('Аварийный Telegram-прокси ещё не настроен администратором')
+ paid_expiry=paid_subscription_expiry(telegram_id);subscriber=paid_expiry is not None
+ with db() as c:record=c.execute('SELECT * FROM emergency_mtproto WHERE telegram_id=?',(telegram_id,)).fetchone()
+ if not subscriber and record and now>=int(record['expires_at']) and now<int(record['cooldown_until']):
+  remaining=int(record['cooldown_until'])-now;raise PermissionError(f'Аварийный доступ уже использован. Повторная выдача будет доступна через {(remaining+86399)//86400} дн.')
+ guest_expiry=(int(record['expires_at']) if record and now<int(record['expires_at']) else now+MTPROTO_GUEST_SECONDS)
+ expiry_ms=0 if subscriber and paid_expiry==0 else (int(paid_expiry) if subscriber else guest_expiry*1000)
+ email=(record['client_email'] if record else f'emergency-tg-{telegram_id}')
+ client={'email':email,'expiryTime':expiry_ms,'tgId':telegram_id,'limitIp':1,'enable':True,'comment':'HOME-VPN emergency Telegram'}
+ try:
+  existing=(mtproto_xapi('GET','/panel/api/clients/get/'+quote(email)).get('obj') or {}).get('client') or {}
+  if existing:
+   existing.update(client);result=mtproto_xapi('POST','/panel/api/clients/update/'+quote(email),client_payload(existing))
+  else:result=mtproto_xapi('POST','/panel/api/clients/add',{'client':client,'inboundIds':[MTPROTO_INBOUND_ID]})
+  if not result.get('success'):raise RuntimeError(str(result.get('msg') or 'ошибка 3x-ui'))
+  links=mtproto_xapi('GET','/panel/api/clients/links/'+quote(email)).get('obj') or []
+  link=next((str(x) for x in links if str(x).startswith(('tg://proxy?','https://t.me/proxy?'))),None)
+  if not link:raise RuntimeError('3x-ui не вернула MTProto-ссылку')
+ except urllib.error.HTTPError as error:raise RuntimeError(f'3x-ui HTTP {error.code}') from None
+ expires_at=0 if expiry_ms==0 else expiry_ms//1000;cooldown=0 if subscriber else (int(record['cooldown_until']) if record else now+MTPROTO_COOLDOWN_SECONDS)
+ with db() as c:c.execute('INSERT INTO emergency_mtproto(telegram_id,client_email,first_issued_at,last_issued_at,expires_at,cooldown_until,subscriber) VALUES(?,?,?,?,?,?,?) ON CONFLICT(telegram_id) DO UPDATE SET last_issued_at=excluded.last_issued_at,expires_at=excluded.expires_at,cooldown_until=excluded.cooldown_until,subscriber=excluded.subscriber',(telegram_id,email,int(record['first_issued_at']) if record else now,now,expires_at,cooldown,1 if subscriber else 0))
+ return {'link':link,'subscriber':subscriber,'expires_at':expires_at,'cooldown_until':cooldown}
+def emergency_device_value():
+ raw=secrets.token_urlsafe(24);return raw+'.'+hmac.new(SESSION,('emergency:'+raw).encode(),hashlib.sha256).hexdigest()
+def emergency_device_valid(value):
+ try:raw,signature=value.rsplit('.',1);return len(raw)>=20 and hmac.compare_digest(signature,hmac.new(SESSION,('emergency:'+raw).encode(),hashlib.sha256).hexdigest())
+ except Exception:return False
+def emergency_web_access(device_value,ip_address):
+ now=int(time.time());device_hash=hashlib.sha256(device_value.encode()).hexdigest();ip_hash=hmac.new(SESSION,('ip:'+ip_address).encode(),hashlib.sha256).hexdigest()
+ if not (MTPROTO_INBOUND_ID and MTPROTO_PUBLIC_HOST and MTPROTO_PUBLIC_PORT):raise RuntimeError('Аварийный Telegram-прокси не настроен')
+ with db() as c:
+  record=c.execute('SELECT * FROM emergency_mtproto_web WHERE device_hash=?',(device_hash,)).fetchone()
+  recent_ip=c.execute('SELECT COUNT(*) FROM emergency_mtproto_web WHERE ip_hash=? AND issued_at>?',(ip_hash,now-86400)).fetchone()[0]
+ if record and now>=int(record['expires_at']) and now<int(record['cooldown_until']):raise PermissionError(f'Повторная выдача будет доступна через {(int(record["cooldown_until"])-now+86399)//86400} дн.')
+ if not record and recent_ip>=5:raise PermissionError('С этого адреса сегодня уже выдано слишком много аварийных доступов')
+ if record and now<int(record['expires_at']):email=record['client_email'];expires_at=int(record['expires_at']);claim=record['claim_token'];cooldown=int(record['cooldown_until'])
+ else:
+  email='emergency-web-'+device_hash[:18];expires_at=now+MTPROTO_GUEST_SECONDS;cooldown=now+MTPROTO_COOLDOWN_SECONDS;claim=secrets.token_urlsafe(24)
+  client={'email':email,'expiryTime':expires_at*1000,'tgId':0,'limitIp':1,'enable':True,'comment':'HOME-VPN emergency web access'}
+  existing=(mtproto_xapi('GET','/panel/api/clients/get/'+quote(email)).get('obj') or {}).get('client') or {}
+  if existing:existing.update(client);result=mtproto_xapi('POST','/panel/api/clients/update/'+quote(email),client_payload(existing))
+  else:result=mtproto_xapi('POST','/panel/api/clients/add',{'client':client,'inboundIds':[MTPROTO_INBOUND_ID]})
+  if not result.get('success'):raise RuntimeError(str(result.get('msg') or 'ошибка 3x-ui'))
+  with db() as c:c.execute('INSERT INTO emergency_mtproto_web(device_hash,ip_hash,claim_token,client_email,issued_at,expires_at,cooldown_until) VALUES(?,?,?,?,?,?,?) ON CONFLICT(device_hash) DO UPDATE SET ip_hash=excluded.ip_hash,claim_token=excluded.claim_token,client_email=excluded.client_email,issued_at=excluded.issued_at,expires_at=excluded.expires_at,cooldown_until=excluded.cooldown_until,telegram_id=NULL',(device_hash,ip_hash,claim,email,now,expires_at,cooldown))
+ links=mtproto_xapi('GET','/panel/api/clients/links/'+quote(email)).get('obj') or [];link=next((str(x) for x in links if str(x).startswith(('tg://proxy?','https://t.me/proxy?'))),None)
+ if not link:raise RuntimeError('3x-ui не вернула MTProto-ссылку')
+ return {'link':link,'claim_token':claim,'expires_at':expires_at,'cooldown_until':cooldown}
+def claim_emergency_web(token,telegram_id):
+ now=int(time.time());telegram_id=int(telegram_id)
+ with db() as c:
+  record=c.execute('SELECT * FROM emergency_mtproto_web WHERE claim_token=?',(str(token),)).fetchone();used=c.execute('SELECT * FROM emergency_mtproto WHERE telegram_id=?',(telegram_id,)).fetchone()
+  if not record or now>=int(record['expires_at']):raise PermissionError('Аварийная ссылка истекла')
+  if record['telegram_id'] and int(record['telegram_id'])!=telegram_id:raise PermissionError('Ссылка уже привязана к другому Telegram ID')
+  if used and now<int(used['cooldown_until']) and paid_subscription_expiry(telegram_id) is None:raise PermissionError('Аварийный доступ для этого Telegram ID уже использован')
+  c.execute('UPDATE emergency_mtproto_web SET telegram_id=? WHERE device_hash=?',(telegram_id,record['device_hash']))
+  c.execute('INSERT INTO emergency_mtproto(telegram_id,client_email,first_issued_at,last_issued_at,expires_at,cooldown_until,subscriber) VALUES(?,?,?,?,?,?,0) ON CONFLICT(telegram_id) DO UPDATE SET client_email=excluded.client_email,last_issued_at=excluded.last_issued_at,expires_at=excluded.expires_at,cooldown_until=excluded.cooldown_until',(telegram_id,record['client_email'],record['issued_at'],now,record['expires_at'],record['cooldown_until']))
+ client=(mtproto_xapi('GET','/panel/api/clients/get/'+quote(record['client_email'])).get('obj') or {}).get('client') or {};client['tgId']=telegram_id;mtproto_xapi('POST','/panel/api/clients/update/'+quote(record['client_email']),client_payload(client))
+ return {'ok':True,'expires_at':record['expires_at']}
 def scheduled_for(email):
  with db() as c:return c.execute("SELECT * FROM scheduled_changes WHERE email=? AND applied_at IS NULL ORDER BY effective_at,order_id",(email,)).fetchall()
 def apply_scheduled_changes():
@@ -451,7 +556,7 @@ def _provision(o):
    u=c.execute('SELECT username FROM users WHERE id=?',(o['user_id'],)).fetchone();email=u['username'] if u and not u['username'].startswith('tg_') else None
   if not email and o['telegram_id']:
    b=c.execute('SELECT login FROM bot_profiles WHERE telegram_id=?',(o['telegram_id'],)).fetchone();email=b['login'] if b else None
- email=unique_client_name(email or ('admin-test' if o['telegram_id'] and int(o['telegram_id'])==ADMIN_TG else f"shop-{o['id']}"));p=order_plan(o);traffic_limit=p[4]*1024*1024*1024
+ email=unique_client_name(email or ('admin-test' if o['telegram_id'] and int(o['telegram_id'])==admin_telegram_id() else f"shop-{o['id']}"));p=order_plan(o);traffic_limit=p[4]*1024*1024*1024
  body={'client':{'email':email,'totalGB':traffic_limit,'expiryTime':int((time.time()+p[1]*86400)*1000),'tgId':o['telegram_id'] or 0,'limitIp':p[3],'enable':True,'comment':f"{BRAND_NAME} · {p[3]} device(s)"},'inboundIds':XIDS}
  r=xapi('POST','/panel/api/clients/add',body)
  if not r.get('success'):raise RuntimeError('Не удалось создать подписку')
@@ -653,6 +758,7 @@ CSS+=".topnav{display:flex;flex-wrap:wrap;gap:10px;margin:25px 0}.navbtn{display
 CSS+=".site-footer{display:flex;flex-wrap:wrap;gap:12px 20px;margin-top:45px;padding:24px 0;border-top:1px solid var(--l);font-size:13px}.site-footer a{color:var(--u);text-decoration:none}.site-footer a:hover{color:var(--t)}.consent{display:flex;align-items:flex-start;gap:10px;margin:14px 0;font-size:14px}.consent input{width:auto;margin-top:3px}.legal{max-width:850px}.legal h2{margin-top:28px}.security-log summary{cursor:pointer;font-weight:800;font-size:20px}"
 CSS+=".navbtn.active{background:#409eff;border-color:#79bbff;color:#fff;box-shadow:0 0 0 2px rgba(64,158,255,.18)}.brand a{color:inherit;text-decoration:none}"
 CSS+=".telegram-login{background:#2aabee!important;color:#fff!important;margin:12px 0}.divider{display:flex;align-items:center;gap:12px;color:var(--u);margin:18px 0}.divider:before,.divider:after{content:'';height:1px;background:var(--l);flex:1}.authnote{text-align:center;font-size:13px}.plans form{margin-top:20px}"
+CSS+=".login-box{max-width:620px}.login-intro{margin:7px 0 20px}.login-form-panel{padding:18px;border:1px solid #31445f;border-radius:14px;background:#0a1627}.login-form-panel h3{margin:0 0 5px}.login-form-panel form{margin-top:12px}.login-alternatives{display:grid;grid-template-columns:1fr 1fr;gap:12px}.login-option{display:flex;flex-direction:column;padding:17px;border:1px solid var(--l);border-radius:14px;background:#0b1728}.login-option.telegram{border-color:#2aabee}.login-option.emergency{border-color:#d89b35}.login-option h3{margin:0 0 7px;font-size:17px}.login-option p{min-height:52px;margin:0 0 13px;font-size:14px}.login-option .btn{margin-top:auto}.login-facts{margin:0 0 14px;padding-left:19px;color:var(--u);font-size:13px;line-height:1.5}.login-help{display:flex;flex-wrap:wrap;justify-content:center;gap:8px 18px;margin:20px 0 8px;padding-top:18px;border-top:1px solid var(--l);font-size:14px}.login-help a{color:var(--m)}@media(max-width:620px){.login-alternatives{grid-template-columns:1fr}.login-option p{min-height:0}.login-help{align-items:stretch;flex-direction:column;text-align:center}}"
 CSS+="select{width:100%;padding:13px;border:1px solid var(--l);border-radius:8px;background:#091525;color:white;margin:6px 0 16px;font-size:15px}.devselect:focus{outline:2px solid #409eff}.plans{align-items:stretch}"
 CSS+="table{width:100%;border-collapse:collapse}th,td{padding:12px 10px;border-bottom:1px solid var(--l);text-align:left}.delbtn{padding:8px 12px;border:1px solid #f56c6c;border-radius:7px;background:#3b1d25;color:#ff9da5;font-weight:700;cursor:pointer}.delbtn:hover{background:#f56c6c;color:white}.notice{padding:13px 16px;border-radius:8px;background:#183d35;color:#75e6bd;margin:0 0 18px}.tablewrap{overflow-x:auto}"
 CSS+=".approvebtn{padding:8px 12px;border:1px solid #67c23a;border-radius:7px;background:#173725;color:#8aef75;font-weight:700;cursor:pointer}.review-actions{display:flex;gap:7px;min-width:300px}.review-actions form{margin:0}"
@@ -673,6 +779,8 @@ CSS+=".adminnav{padding:12px;border:1px solid #334158;border-radius:12px;backgro
 CSS+="""body{background:radial-gradient(circle at 85% -10%,rgba(53,116,255,.22),transparent 34%),radial-gradient(circle at 5% 20%,rgba(47,211,170,.12),transparent 30%),#07101d;letter-spacing:-.01em}.w{max-width:1240px;padding:24px 28px 64px}.site-header{position:sticky;top:12px;z-index:50;padding:12px 14px 0;margin:-4px -14px 18px;border:1px solid rgba(119,145,181,.2);border-radius:20px;background:rgba(8,18,32,.86);box-shadow:0 18px 50px rgba(0,0,0,.24);backdrop-filter:blur(18px)}.n{align-items:center;gap:22px}.brand{font-size:20px;letter-spacing:-.03em}.brand a{display:flex;align-items:center;gap:10px}.brand-mark{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:11px;background:linear-gradient(145deg,#56ecc2,#3a8dff);color:#06151b;font-size:18px;box-shadow:0 8px 25px rgba(74,198,198,.24)}.brand-copy{display:flex;flex-direction:column;line-height:1.05}.brand-copy small{margin-top:4px;color:#8ea1bb;font-size:10px;font-weight:650;letter-spacing:.05em;text-transform:uppercase}.user-tools,.header-actions{display:flex;align-items:center;flex-direction:row;gap:8px;margin-left:auto}.icon-action,.profile-chip,.logout-action{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:40px;padding:9px 12px;border:1px solid #2a3b55;border-radius:12px;background:#101d30;color:#eaf2ff;text-decoration:none;font-size:13px;font-weight:750;transition:transform .18s,border-color .18s,background .18s}.icon-action:hover,.profile-chip:hover{transform:translateY(-1px);border-color:#4a77b7;background:#162945}.profile-chip{max-width:220px}.profile-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.logout-action{background:#281921;border-color:#51303c;color:#ffabb1}.logout-action:hover{background:#40202a;border-color:#8a4351}.notification-count{position:relative;min-width:19px;height:19px}.cart-count{background:#55e6bd;color:#052018}.topnav{flex-wrap:nowrap;gap:4px;margin:10px 0 0;padding:7px 0;border-top:1px solid rgba(110,137,173,.16);overflow-x:auto;scrollbar-width:none}.topnav::-webkit-scrollbar{display:none}.navbtn{flex:0 0 auto;padding:9px 11px;border:0;border-radius:10px;background:transparent;color:#9fb1c9;font-size:13px}.navbtn:hover{background:#14243a;border-color:transparent}.navbtn.active{background:#192e49;border:0;box-shadow:none;color:#fff}.hero{position:relative;padding:64px 0 34px}.hero:before{content:'';position:absolute;z-index:-1;inset:20px 48% 0 -30vw;background:radial-gradient(circle,rgba(54,134,255,.12),transparent 64%)}.hero h1{max-width:850px;font-size:clamp(42px,6.5vw,76px);letter-spacing:-.055em}.hero p{max-width:760px;font-size:18px}.eyebrow{display:inline-flex;padding:7px 11px;margin-bottom:18px;border:1px solid rgba(85,230,189,.28);border-radius:999px;background:rgba(85,230,189,.08);color:#7ce8c9;font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}.card{border:1px solid rgba(113,142,180,.22);border-radius:18px;background:linear-gradient(145deg,rgba(19,34,55,.96),rgba(10,21,37,.97));box-shadow:0 18px 45px rgba(0,0,0,.14)}.btn{min-height:44px;border-radius:11px;background:linear-gradient(135deg,#59e7be,#3bcba6);box-shadow:0 9px 22px rgba(57,202,164,.14);transition:transform .18s,filter .18s}.btn:hover{transform:translateY(-1px);filter:brightness(1.07)}.btn.soft{box-shadow:none;background:#1a2b42;color:#e7effb}.pricing-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;align-items:stretch}.pricing-card{position:relative;display:flex;flex-direction:column;min-height:390px;padding:24px;overflow:hidden}.pricing-card:after{content:'';position:absolute;width:150px;height:150px;right:-70px;top:-70px;border-radius:50%;background:rgba(64,158,255,.09)}.pricing-card.popular{border-color:#4f91ed;box-shadow:0 22px 55px rgba(30,104,206,.19)}.popular-label{position:absolute;right:16px;top:15px;padding:5px 8px;border-radius:999px;background:#397ee0;color:#fff;font-size:10px;font-weight:850;text-transform:uppercase}.pricing-card h2{margin:4px 0 5px;font-size:22px}.pricing-card .price{margin:18px 0 6px;font-size:38px;letter-spacing:-.04em}.pricing-card .price small{font-size:13px;font-weight:600}.pricing-card ul{padding:0;margin:18px 0 22px;list-style:none;color:#b5c4d8}.pricing-card li{padding:6px 0}.pricing-card li:before{content:'✓';margin-right:9px;color:#55e6bd;font-weight:900}.pricing-card form{margin-top:auto}.pricing-card select{margin:0 0 12px}.trust-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:18px 0 26px}.trust-item{padding:15px 17px;border:1px solid rgba(112,143,182,.16);border-radius:14px;background:rgba(15,29,48,.6);color:#b8c7da}.trust-item b{display:block;margin-bottom:3px;color:#f4f8ff}.cart-layout{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:20px;align-items:start}.cart-items{display:grid;gap:12px}.cart-item{display:grid;grid-template-columns:1fr auto;gap:18px;align-items:center;padding:20px}.cart-item h3{margin:0 0 7px}.cart-meta{display:flex;flex-wrap:wrap;gap:8px 14px;color:#9fb0c6;font-size:13px}.cart-price{font-size:24px;font-weight:850;color:#eaf3ff}.cart-summary{position:sticky;top:160px}.cart-summary .summary-line{display:flex;justify-content:space-between;gap:16px;padding:11px 0;border-bottom:1px solid #24334b}.cart-summary .summary-total{font-size:24px;font-weight:850}.empty-state{padding:48px 24px;text-align:center}.empty-state .empty-icon{font-size:52px}.status-pill{display:inline-flex;padding:5px 9px;border-radius:999px;background:#1b304b;color:#9ec9ff;font-size:12px;font-weight:800}.desktop-label{display:inline}@media(max-width:980px){.pricing-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.cart-layout{grid-template-columns:1fr}.cart-summary{position:static}.profile-chip{display:none}}@media(max-width:700px){.w{padding:12px 12px 48px}.site-header{top:6px;padding:9px 10px 0;margin:0 0 12px;border-radius:16px}.brand-copy .a,.brand-copy small{display:none}.brand-mark{width:34px;height:34px}.header-actions{gap:5px}.icon-action,.logout-action{min-width:38px;min-height:38px;padding:8px}.desktop-label{display:none}.topnav{margin-top:8px}.navbtn{min-height:38px;padding:8px 10px;font-size:12px}.hero{padding:42px 2px 24px}.hero h1{font-size:42px}.hero p{font-size:16px}.pricing-grid,.trust-strip{grid-template-columns:1fr}.pricing-card{min-height:0}.cart-item{grid-template-columns:1fr}.cart-item .order-actions{width:100%}.cart-item .order-actions>*{flex:1}.card{border-radius:15px}}"""
 CSS+="input[type=checkbox]{width:auto;margin-right:8px}.admin-section textarea{font-family:ui-monospace,monospace}"
 CSS+=".adminnav{display:flex;flex-wrap:wrap;overflow:visible;gap:7px}.adminnav .navbtn{font-size:16px;padding:12px 15px}@media(max-width:760px){.adminnav{display:flex!important;flex-wrap:nowrap;overflow-x:auto;padding-bottom:10px}.adminnav .navbtn{font-size:15px;padding:11px 13px}}"
+CSS+=".admin-home-hero{padding:38px 0 18px}.admin-home-hero h1{font-size:clamp(34px,5vw,54px)}.admin-priority-grid,.admin-link-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.admin-priority{display:flex;flex-direction:column;min-height:180px}.admin-priority h2{margin:8px 0;font-size:24px}.admin-priority .btn{margin-top:auto;text-align:center}.admin-link-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.admin-link{display:block;padding:17px;border:1px solid #2b3d58;border-radius:13px;background:#0b1728;color:#e9f2ff;text-decoration:none;font-weight:800}.admin-link small{display:block;margin-top:5px;font-weight:500}.admin-more{margin-top:18px;padding:5px 16px 16px;border:1px solid #2b3d58;border-radius:14px;background:#0b1728}.admin-more summary{padding:14px 0}@media(max-width:850px){.admin-priority-grid{grid-template-columns:1fr}.admin-link-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.admin-priority{min-height:0}}@media(max-width:480px){.admin-link-grid{grid-template-columns:1fr}}"
+CSS+=".settings-group{display:grid;grid-template-columns:minmax(190px,.7fr) minmax(0,2fr);gap:24px;margin:0 0 16px;padding:22px;border:1px solid #263a55;border-radius:16px;background:#0a1525}.settings-group h2{margin:7px 0}.settings-group p{margin-bottom:0}.settings-group .admin-link-grid{grid-template-columns:repeat(2,minmax(0,1fr))}@media(max-width:760px){.settings-group{grid-template-columns:1fr;padding:17px}.settings-group .admin-link-grid{grid-template-columns:1fr}}"
 CSS+=".recovery-codes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:0;list-style:none}.recovery-codes li{padding:10px;border:1px solid var(--l);border-radius:9px;background:#091525;text-align:center}.recovery-codes code{color:var(--m);font-size:15px}@media(max-width:520px){.recovery-codes{grid-template-columns:1fr}}"
 CSS+=".purchase-wizard{max-width:720px;margin:20px auto}.purchase-wizard .step-number{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;margin:15px 8px 5px 0;border-radius:50%;background:#409eff;color:#fff;font-weight:900}.purchase-wizard select{width:100%;padding:13px;border:1px solid var(--l);border-radius:10px;background:#091525;color:#fff}.onboarding ol{padding-left:22px}.onboarding li{margin:10px 0}.user-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.device-list{display:grid;gap:8px}.device-row{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;padding:11px;border:1px solid #263b59;border-radius:10px;background:#0a1627}.warning-limit{color:#ffbd59;font-weight:800}.diag-row{display:grid;grid-template-columns:38px 1fr;gap:10px;padding:14px;margin:8px 0;border:1px solid #29415e;border-radius:12px}.diag-row span{font-size:24px}.diag-row.ok{background:#0b2b25;border-color:#17624e}.diag-row.wait{background:#302613;border-color:#7d5c20}details{margin-top:8px}summary{cursor:pointer;color:#90c5ff;font-weight:700}@media(max-width:760px){.user-detail-grid{grid-template-columns:1fr}.device-row{grid-template-columns:1fr}}"
 CSS+=".tariff-admin-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}.tariff-admin-card{display:flex;flex-direction:column;min-height:300px;padding:20px}.tariff-admin-card.archived{opacity:.68}.tariff-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.tariff-card-head h2{margin:4px 0}.tariff-code{color:#8296b2;font:12px ui-monospace,monospace}.tariff-admin-price{margin:18px 0 12px;color:#79bbff;font-size:34px;font-weight:900}.tariff-admin-meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:18px}.tariff-admin-meta span{padding:10px;border:1px solid #263b59;border-radius:10px;background:#0a1627;color:#c7d5e8}.tariff-status{display:inline-flex;padding:5px 9px;border-radius:999px;background:#1d2d47;color:#c9d8ea;font-size:11px;font-weight:850;white-space:nowrap}.tariff-status.published{background:#173725;color:#8aef75}.tariff-status.scheduled{background:#493a16;color:#ffd56a}.tariff-status.archived{background:#3b1d25;color:#ff9da5}.tariff-admin-card .admin-actions{margin-top:auto}.tariff-admin-card .admin-actions>*{flex:1}.tariff-admin-card .admin-actions form button,.tariff-admin-card .admin-actions a{width:100%;height:100%}@media(max-width:520px){.tariff-admin-grid{grid-template-columns:1fr}.tariff-admin-meta{grid-template-columns:1fr 1fr}}"
@@ -845,12 +953,13 @@ def user_tools(username):
  if not username:return ''
  _,items=site_notification_items(username);count=sum(1 for x in items if x['unread'])
  with db() as c:
-  u=c.execute('SELECT id,telegram_id,role FROM users WHERE username=?',(username,)).fetchone()
+  u=c.execute('SELECT id,telegram_id,role,admin_owner_id FROM users WHERE username=?',(username,)).fetchone()
   cart=c.execute("SELECT count(*) FROM orders WHERE (user_id=? OR (? IS NOT NULL AND telegram_id=?)) AND status IN ('pending','error') AND (expires_at IS NULL OR expires_at>?)",(u['id'],u['telegram_id'],u['telegram_id'],int(time.time()))).fetchone()[0] if u else 0
  notice_badge=f'<span class=notification-count>{count}</span>' if count else ''
  cart_badge=f'<span class="notification-count cart-count">{cart}</span>' if cart else ''
  cart_link='' if u and u['role']=='admin' else f'<a class=icon-action href=/cart aria-label="Корзина">🛒 <span class=desktop-label>Корзина</span>{cart_badge}</a>'
- return f'''<div class="user-tools header-actions"><a class=icon-action href=/notifications aria-label="Уведомления">🔔 <span class=desktop-label>Уведомления</span>{notice_badge}</a>{cart_link}<a class=profile-chip href=/settings/security title="Настройки аккаунта">👤 <span>{html.escape(username)}</span></a><a class=logout-action href=/logout aria-label="Выйти">↪ <span class=desktop-label>Выйти</span></a></div>'''
+ label='Отладочный пользователь' if u and u['admin_owner_id'] else username
+ return f'''<div class="user-tools header-actions"><a class=icon-action href=/notifications aria-label="Уведомления">🔔 <span class=desktop-label>Уведомления</span>{notice_badge}</a>{cart_link}<a class=profile-chip href=/settings/security title="Настройки аккаунта">👤 <span>{html.escape(label)}</span></a><a class=logout-action href=/logout aria-label="Выйти">↪ <span class=desktop-label>Выйти</span></a></div>'''
 def telegram_link_warning(username):
  if not username:return ''
  try:
@@ -858,16 +967,11 @@ def telegram_link_warning(username):
   if not u or u['role']!='user' or u['telegram_id']:return ''
   return '''<div class="account-link-warning callout warn"><b>⚠ Аккаунт пока не привязан к Telegram</b><p>Без привязки вы не получите в Telegram уведомления об оплате, окончании подписки и технических работах.</p><a class="btn telegram-login" href=/link-telegram-start>✈ Привязать Telegram</a></div>'''
  except Exception:return ''
-def backup_control(*arguments):
- command=['sudo','-n','/usr/local/sbin/home-vpn-backup-control',*arguments]
- result=subprocess.run(command,capture_output=True,text=True,timeout=20)
- if result.returncode:raise RuntimeError((result.stderr or result.stdout or 'Ошибка управления резервными копиями').strip()[:500])
- return json.loads(result.stdout or '{}')
 def page(title,body,admin=False):
  bot_panel_link=f'<a class=navbtn href="{html.escape(BOT_ADMIN_URL,quote=True)}" target=_blank rel=noopener>🤖 Панель бота</a>' if BOT_ADMIN_URL else ''
- admin_nav=f'<div class="topnav adminnav"><a class=navbtn href={html.escape(ADMIN_ENTRY,quote=True)}>📊 Обзор</a><a class=navbtn href=/admin#users>👥 Пользователи</a><a class=navbtn href=/admin/tariffs>💰 Тарифы</a><a class=navbtn href=/admin/payment>💳 Оплата</a><a class=navbtn href=/admin/servers>🖥 Серверы</a><a class=navbtn href=/admin/orders/pending>✅ Проверка оплат</a><a class=navbtn href=/admin/tickets>🎫 Тикеты</a><a class=navbtn href=/admin/guest-tickets>💬 Гостевой чат</a><a class=navbtn href=/admin/mail>✉ Почта</a><a class=navbtn href=/admin/backups>💾 Резервное копирование</a>{bot_panel_link}<a class=navbtn href=/admin/test-user>🧪 Тестовые пользователи</a><a class=navbtn href=/admin/maintenance>🛠 Техработы</a><a class=navbtn href=/admin/config>🧩 Настройки сервиса</a><a class=navbtn href=/settings/security>🔐 Безопасность</a><a class="navbtn soft" href={html.escape(TEST_ENTRY,quote=True)}>👤 Тестовый пользователь</a></div>'
+ admin_nav=f'<div class="topnav adminnav"><a class=navbtn href=/admin>📊 Обзор</a><a class=navbtn href="/admin?view=users">👥 Пользователи</a><a class=navbtn href=/admin/orders/pending>💳 Оплаты</a><a class=navbtn href=/admin/tickets>🎫 Поддержка</a><a class=navbtn href=/admin/settings>⚙ Настройки</a><a class=navbtn href=/mode>👤 Режим</a></div>'
  user_nav='<div class=topnav><a class=navbtn data-tab=tariffs href=/#tariffs>Тарифы</a><a class=navbtn data-tab=account href=/account>Мои подписки</a><a class=navbtn data-tab=instructions href=/instructions>Подключение</a><a class=navbtn data-tab=downloads href=/downloads>Приложения</a><a class=navbtn data-tab=support href=/support>Поддержка</a><a class=navbtn data-tab=status href=/status>Серверы</a><a class=navbtn data-tab=settings href=/settings/security>Безопасность</a></div>'
- nav='' if title in ('Вход','Вход администратора','Вход тестового пользователя','Регистрация','Выбор режима','Проверка 2FA','Условия использования','Конфиденциальность','Оплата и возвраты') else (admin_nav if admin else user_nav)
+ nav='' if title in ('Вход','Вход администратора','Регистрация','Выбор режима','Проверка 2FA','Условия использования','Конфиденциальность','Оплата и возвраты') else (admin_nav if admin else user_nav)
  script="""<script>(function(){function mark(){document.querySelectorAll('.navbtn').forEach(function(x){x.classList.remove('active')});var p=location.pathname,k=p==='/'?(location.hash==='#tariffs'?'tariffs':'home'):p.slice(1).split('/')[0];var a=document.querySelector('[data-tab="'+k+'"]');if(a)a.classList.add('active')}function cards(){document.querySelectorAll('table').forEach(function(t){t.classList.add('card-list');var rows=Array.from(t.rows),head=rows.find(function(r){return r.querySelector('th')});if(!head)return;head.classList.add('card-list-head');var labels=Array.from(head.cells).map(function(c){return c.textContent.trim()});rows.forEach(function(r){if(r===head)return;r.classList.add('data-card');Array.from(r.cells).forEach(function(c,i){c.setAttribute('data-label',labels[i]||'')})})})}mark();cards();addEventListener('hashchange',mark)})()</script>"""
  footer='''<footer class=site-footer><a href=/terms>Условия использования</a><a href=/privacy>Конфиденциальность</a><a href=/refund-policy>Оплата и возвраты</a><a href=/guest-support>Поддержка</a></footer>'''
  mark=html.escape(BRAND_NAME[:1].upper() or 'V');return f"<!doctype html><html lang=ru><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><meta name=theme-color content='#07101d'><title>{title} · {html.escape(BRAND_NAME)}</title><style>{CSS}</style><body><div class=w><header class=site-header><div class=n><b class=brand><a href=/><span class=brand-mark>{mark}</span><span class=brand-copy>{html.escape(BRAND_NAME)} <span class=a>{html.escape(BRAND_TAGLINE)}</span><small>{html.escape(BRAND_SUBTITLE)}</small></span></a></b><div data-user-tools></div></div>{nav}</header>{body}{footer}</div>{script}</body></html>".encode()
@@ -877,7 +981,7 @@ class H(BaseHTTPRequestHandler):
  def sendx(self,code,data,typ='text/html; charset=utf-8'):
   if isinstance(data,str):data=data.encode()
   if typ.startswith('text/html') and b'<div class=w>' in data:
-   username=self.who();data=data.replace(b'<div data-user-tools></div>',user_tools(username).encode(),1);banner=telegram_link_warning(username)+maintenance_banner(username)
+   username=self.who();tools=user_tools(username);tools=(f'<a class=icon-action href=/mode aria-label="Сменить режим">⇄ <span class=desktop-label>Режим</span></a>'+tools) if self.standby_admin() and not self.isadmin() else tools;data=data.replace(b'<div data-user-tools></div>',tools.encode(),1);banner=telegram_link_warning(username)+maintenance_banner(username)
    if banner:data=data.replace(b'<div class=w>',b'<div class=w>'+banner.encode(),1)
   self.send_response(code);self.send_header('Content-Type',typ);self.send_header('Content-Length',str(len(data)));self.send_header('X-Content-Type-Options','nosniff');self.send_header('X-Frame-Options','DENY');self.send_header('Referrer-Policy','no-referrer');self.send_header('Permissions-Policy','camera=(), microphone=(), geolocation=()');self.end_headers()
   if self.command!='HEAD':self.wfile.write(data)
@@ -896,18 +1000,30 @@ class H(BaseHTTPRequestHandler):
   self.end_headers()
   if self.command!='HEAD':
    with path.open('rb') as stream:shutil.copyfileobj(stream,self.wfile,1024*256)
+ def send_path(self,path,name,remove=False):
+  try:
+   size=path.stat().st_size;self.send_response(200);self.send_header('Content-Type','application/octet-stream');self.send_header('Content-Disposition',f'attachment; filename="{name}"');self.send_header('Content-Length',str(size));self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff');self.end_headers()
+   with path.open('rb') as stream:shutil.copyfileobj(stream,self.wfile,1024*256)
+  finally:
+   if remove:path.unlink(missing_ok=True)
  def jout(self,code,x):self.sendx(code,json.dumps(x,ensure_ascii=False),'application/json')
  def data(self):
   raw=self.rfile.read(int(self.headers.get('Content-Length','0')));return json.loads(raw or b'{}') if 'json' in self.headers.get('Content-Type','') else {k:v[0] for k,v in parse_qs(raw.decode()).items()}
  def cookie(self,name):return next((x.split('=',1)[1] for x in self.headers.get('Cookie','').split('; ') if x.startswith(name+'=')),'')
- def who(self):
-  t=self.cookie('vpn_session')
+ def who_from(self,cookie_name):
+  t=self.cookie(cookie_name)
   try:
    b,s=t.rsplit('.',1);parts=base64.urlsafe_b64decode(b+'==').decode().split('|');u,e=parts[0],parts[1];token_epoch=int(parts[2]) if len(parts)>2 else 0
    if int(e)<=time.time() or not hmac.compare_digest(s,hmac.new(SESSION,b.encode(),hashlib.sha256).hexdigest()):return None
    with db() as c:r=c.execute('SELECT session_epoch,blocked_at FROM users WHERE username=?',(u,)).fetchone()
    return u if r and not r['blocked_at'] and int(r['session_epoch'] or 0)==token_epoch else None
   except:return None
+ def who(self):return self.who_from('vpn_session')
+ def standby_admin(self):
+  username=self.who_from('vpn_admin_session')
+  if not username:return None
+  with db() as c:row=c.execute('SELECT role FROM users WHERE username=?',(username,)).fetchone()
+  return username if row and row['role']=='admin' else None
  def need(self):
   if self.who():return True
   self.redir('/login');return False
@@ -919,10 +1035,13 @@ class H(BaseHTTPRequestHandler):
  def token(self,u):
   with db() as c:r=c.execute('SELECT session_epoch FROM users WHERE username=?',(u,)).fetchone()
   epoch=int(r['session_epoch'] or 0) if r else 0;b=base64.urlsafe_b64encode(f'{u}|{int(time.time()+86400)}|{epoch}'.encode()).decode().rstrip('=');return b+'.'+hmac.new(SESSION,b.encode(),hashlib.sha256).hexdigest()
- def redir(self,url,cookie=None):self.send_response(303);self.send_header('Location',url);cookie and self.send_header('Set-Cookie',cookie);self.end_headers()
+ def redir(self,url,cookie=None):
+  self.send_response(303);self.send_header('Location',url)
+  for value in (cookie if isinstance(cookie,(list,tuple)) else [cookie] if cookie else []):self.send_header('Set-Cookie',value)
+  self.end_headers()
  def do_GET(self):
   p=urlparse(self.path).path
-  if self.limited('auth' if p in ('/login','/register','/2fa-login','/forgot-password','/reset-password') or p==ADMIN_ENTRY or p==TEST_ENTRY else 'general'):return
+  if self.limited('auth' if p in ('/login','/register','/2fa-login','/forgot-password','/reset-password') or p==ADMIN_ENTRY else 'general'):return
   if p.startswith('/assets/'):return self.static_file('/assets/',ASSET_ROOT)
   if p.startswith('/files/'):return self.static_file('/files/',DOWNLOAD_ROOT,True)
   brand=html.escape(BRAND_NAME)
@@ -932,18 +1051,32 @@ class H(BaseHTTPRequestHandler):
    action=html.escape(ADMIN_ENTRY,quote=True)
    body=f'''<div class="card box"><h2>Вход администратора</h2><p>Закрытая точка входа в панель управления {brand}.</p><form method=post action="{action}"><label>Логин администратора</label><input name=username autocomplete=username required><label>Пароль</label><input name=password type=password autocomplete=current-password required><button class=btn>Войти в панель управления</button></form><div class=divider>или</div><a class="btn telegram-login" href=/admin-telegram-start>✈ Войти через Telegram администратора</a></div>'''
    return self.sendx(200,page('Вход администратора',body))
-  if p==TEST_ENTRY:
-   if self.who():
-    with db() as c:current=c.execute('SELECT role FROM users WHERE username=?',(self.who(),)).fetchone()
-    if current and current['role']=='test':return self.redir('/')
-   action=html.escape(TEST_ENTRY,quote=True)
-   body=f'''<div class="card box"><h2>Вход тестового пользователя</h2><p>Закрытая точка входа для проверки пользовательской части {brand}.</p><form method=post action="{action}"><label>Логин тестового пользователя</label><input name=username autocomplete=username required><label>Пароль</label><input name=password type=password autocomplete=current-password required><button class=btn>Войти</button></form></div>'''
-   return self.sendx(200,page('Вход тестового пользователя',body))
   if p=='/signin':return self.redir('/login','vpn_session=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax')
   if p=='/2fa-login':return self.sendx(200,page('Проверка 2FA','<div class="card box"><h2>Двухфакторная аутентификация</h2><p>Введите шестизначный код из приложения-аутентификатора.</p><form method=post action=/2fa-login><label>Одноразовый код</label><input name=code inputmode=numeric pattern="[0-9]{6}" maxlength=6 autocomplete=one-time-code required autofocus><button class=btn>Подтвердить вход</button></form><a class="btn soft backbtn" href=/login>← Вернуться ко входу</a></div>'))
   if p=='/login':
-   enabled=mail_enabled();email_links='<a class=a href=/register>Зарегистрироваться по почте</a> · <a class=a href=/forgot-password>Забыли пароль?</a>' if enabled else '<a class=a href=/register>Зарегистрироваться</a>';email_note='Почта используется для подтверждения регистрации, восстановления доступа и уведомлений о входе.' if enabled else 'Вход по почте включится после настройки SMTP.'
-   return self.sendx(200,page('Вход',f'<div class="card box"><h2>Вход</h2><form method=post action=/login><label>{"Почта или логин" if enabled else "Логин"}</label><input name=username autocomplete=username placeholder="{"name@example.com или familiaio" if enabled else "familiaio"}" required><label>Пароль или резервный код</label><input name=password type=password autocomplete=current-password placeholder="Введите пароль или одноразовый код" required><button class=btn>Войти</button></form><p>{email_links}</p><p><a class=a href=/guest-support>Написать в поддержку без входа</a></p><div class=divider>или</div><a class="btn telegram-login" href=/telegram-start>✈ Войти через Telegram</a><p class=authnote>{email_note}</p><button type=button class="btn soft backbtn" onclick="history.length>1?history.back():location.href=&quot;/&quot;">← Назад</button></div>'))
+   enabled=mail_enabled();email_links='<a class=a href=/register>Зарегистрироваться по почте</a><a class=a href=/forgot-password>Забыли пароль?</a>' if enabled else '<a class=a href=/register>Зарегистрироваться</a>';email_note='Почта используется для подтверждения регистрации, восстановления доступа и уведомлений о входе.' if enabled else 'Вход по почте включится после настройки SMTP.'
+   emergency_url='/emergency-telegram'
+   form=f'''<div class=login-form-panel><h3>Логин и пароль</h3><p>Войдите в свой личный кабинет.</p><form method=post action=/login><label>{"Почта или логин" if enabled else "Логин"}</label><input name=username autocomplete=username placeholder="{"name@example.com или familiaio" if enabled else "familiaio"}" required><label>Пароль или резервный код</label><input name=password type=password autocomplete=current-password placeholder="Введите пароль или одноразовый код" required><button class=btn>Войти</button></form></div>'''
+   alternatives=f'''<div class=divider>Другие способы входа</div><div class=login-alternatives><section class="login-option telegram"><h3>✈ Через Telegram</h3><p>Быстрый вход через бота HOME-VPN.</p><a class="btn telegram-login" href=/telegram-start>Открыть Telegram-бота</a></section><section class="login-option emergency"><h3>🆘 Telegram не открывается?</h3><p>Получите персональный прокси прямо на сайте.</p><ul class=login-facts><li>доступ на 1 час;</li><li>без подписки — повтор через 30 дней;</li><li>с подпиской ограничение не действует.</li></ul><a class="btn soft" href="{html.escape(emergency_url,quote=True)}">Получить временный доступ</a></section></div>'''
+   help_block=f'''<nav class=login-help aria-label="Помощь со входом">{email_links}<a href=/guest-support>Поддержка без входа</a></nav>'''
+   return self.sendx(200,page('Вход',f'<div class="card box login-box"><span class=eyebrow>HOME-VPN</span><h2>Вход в личный кабинет</h2><p class=login-intro>Введите логин и пароль или выберите другой способ ниже.</p>{form}{alternatives}{help_block}<p class=authnote>{email_note}</p><button type=button class="btn soft backbtn" onclick="history.length>1?history.back():location.href=&quot;/&quot;">← На главную</button></div>'))
+  if p=='/emergency-telegram':
+   device=self.cookie('emergency_device');access=None;error=''
+   if emergency_device_valid(device):
+    try:
+     digest=hashlib.sha256(device.encode()).hexdigest()
+     with db() as c:record=c.execute('SELECT * FROM emergency_mtproto_web WHERE device_hash=?',(digest,)).fetchone()
+     if record and int(record['expires_at'])>int(time.time()):access=emergency_web_access(device,self.request_ip())
+     elif record and int(record['cooldown_until'])>int(time.time()):error=f'Повторная выдача будет доступна через {(int(record["cooldown_until"])-int(time.time())+86399)//86400} дн.'
+    except Exception as exc:error=str(exc)
+   if access:
+    bot_claim=BOT_URL+('&start=emergency_'+access['claim_token'] if '?' in BOT_URL else '?start=emergency_'+access['claim_token']);remaining=max(0,access['expires_at']-int(time.time()))
+    body=f'''<div class="card box"><span class=eyebrow>🆘 Аварийный доступ</span><h2>Сначала подключите Telegram</h2><p>Ключ уже создан. Он действует ещё примерно {max(1,remaining//60)} мин.</p><ol><li>Нажмите «Подключить MTProto» — Telegram сам добавит прокси.</li><li>После подключения вернитесь сюда и откройте бота.</li></ol><a class="btn telegram-login" href="{html.escape(access['link'],quote=True)}">🔗 1. Подключить MTProto</a><a class="btn soft backbtn" href="{html.escape(bot_claim,quote=True)}">✈ 2. Открыть бота HOME-VPN</a><div class="callout warn"><b>Не передавайте ссылку</b><p>Она персональная и будет привязана к Telegram ID после запуска бота.</p></div><a class="btn soft backbtn" href=/login>← Ко входу</a></div>'''
+   else:
+    warning=f'<div class="callout warn">{html.escape(error)}</div>' if error else ''
+    disabled=' disabled' if error else ''
+    body=f'''<div class="card box"><span class=eyebrow>🆘 Telegram не открывается</span><h2>Получите прокси прямо на сайте</h2><p>Telegram для этого шага не нужен. Сайт создаст персональную MTProto-ссылку на 1 час.</p>{warning}<form method=post action=/emergency-telegram><button class=btn{disabled}>Получить доступ на 1 час</button></form><small>Без платной подписки повторная выдача возможна через 30 дней.</small><a class="btn soft backbtn" href=/login>← Ко входу</a></div>'''
+   return self.sendx(200,page('Аварийный Telegram',body))
   if p=='/register':
    enabled=mail_enabled();email_field='<label>Электронная почта</label><input name=email type=email maxlength=254 autocomplete=email placeholder="name@example.com" required>' if enabled else '';email_note='На почту придёт ссылка подтверждения. Без подтверждения вход будет недоступен.' if enabled else 'Почтовая регистрация появится после подключения SMTP. Сейчас доступны логин и Telegram.'
    return self.sendx(200,page('Регистрация',f'<div class="card box"><h2>{"Регистрация по почте" if enabled else "Регистрация"}</h2><form method=post>{email_field}<label>Логин</label><input name=username minlength=8 maxlength=32 pattern="(?=.*[A-Za-z])[A-Za-z0-9][A-Za-z0-9-]{{6,30}}[A-Za-z0-9]" title="8–32 символа: латинские буквы обязательны, цифры и дефис разрешены" placeholder="Например: familiaio" required><label>Пароль</label><input name=password type=password minlength=8 pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9]).{{8,}}" title="Минимум 8 символов: большая и маленькая буквы, цифра и спецсимвол" required><label>Повторите пароль</label><input name=password_confirm type=password minlength=8 required><label class=consent><input type=checkbox name=terms value=1 required> Я принимаю <a class=a href=/terms target=_blank>условия использования</a> и <a class=a href=/privacy target=_blank>политику конфиденциальности</a></label><label class=consent><input type=checkbox name=email_opt_in value=1> Получать новости и специальные предложения по почте</label><button class=btn>Создать аккаунт</button></form><p class=authnote>{email_note}</p><div class=divider>или</div><a class="btn telegram-login" href=/telegram-start>✈ Зарегистрироваться через Telegram</a></div>'))
@@ -990,12 +1123,12 @@ class H(BaseHTTPRequestHandler):
     a=c.execute("SELECT * FROM auth_sessions WHERE magic=? AND status='ready' AND used_at IS NULL AND expires_at>?",(magic,int(time.time()))).fetchone()
     if a:c.execute("UPDATE auth_sessions SET used_at=?,status='used' WHERE nonce=?",(int(time.time()),a['nonce']))
    if not a:return self.sendx(400,page('Ссылка недействительна','<div class="card box"><h2 class=err>Ссылка входа устарела или уже использована</h2><a class=btn href=/telegram-start>Получить новую ссылку</a></div>'))
-   with db() as c:u=c.execute('SELECT role,blocked_at FROM users WHERE username=?',(a['username'],)).fetchone()
+   with db() as c:u=c.execute('SELECT role,blocked_at,telegram_id FROM users WHERE username=?',(a['username'],)).fetchone()
    if u and u['blocked_at']:return self.sendx(403,page('Аккаунт заблокирован','<div class="card box"><h2 class=err>Аккаунт временно заблокирован</h2><p>Обратитесь в поддержку.</p></div>'))
-   if u and u['role'] in ('admin','test'):return self.sendx(403,page('Вход запрещён','<div class="card box"><h2 class=err>Неправильный логин или пароль</h2><a class="btn soft" href=/login>Повторить</a></div>'))
+   if u and (u['role']=='admin' or (u['telegram_id'] and int(u['telegram_id'])==admin_telegram_id())):return self.sendx(403,page('Вход запрещён','<div class="card box"><h2 class=err>Неправильный логин или пароль</h2><a class="btn soft" href=/login>Повторить</a></div>'))
    security_event('login_success',a['username'],self.request_ip(),{'entry':'telegram'})
    return self.redir('/mode' if u and u['role']=='admin' else '/',f"vpn_session={self.token(a['username'])}; Path=/; Max-Age=86400; Secure; HttpOnly; SameSite=Lax")
-  if p=='/logout':return self.redir('/login','vpn_session=; Path=/; Max-Age=0; Secure; HttpOnly')
+  if p=='/logout':return self.redir('/login',['vpn_session=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax','vpn_admin_session=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict'])
   if p=='/settings/2fa-qr.png':
    if not self.need():return
    with db() as c:u=c.execute('SELECT username,totp_secret FROM users WHERE username=?',(self.who(),)).fetchone()
@@ -1011,7 +1144,7 @@ class H(BaseHTTPRequestHandler):
    params=parse_qs(urlparse(self.path).query);notice='<div class=notice>Логин изменён. Используйте новый логин при следующем входе.</div>' if params.get('login_changed') else ('<div class=notice>Пароль изменён. Остальные сеансы завершены.</div>' if params.get('password_changed') else ('<div class=notice>Двухфакторная аутентификация включена.</div>' if params.get('twofa_enabled') else ('<div class=notice>Двухфакторная аутентификация отключена.</div>' if params.get('twofa_disabled') else '')))
    if u['twofa_enabled']:twofa="""<div class=card><h2>2FA включена</h2><p>После ввода логина и пароля сайт запрашивает одноразовый код.</p><form method=post action=/settings/2fa-disable><label>Текущий пароль</label><input type=password name=current_password required><label>Код из приложения</label><input name=code inputmode=numeric pattern="[0-9]{6}" maxlength=6 required><button class=delbtn>Отключить 2FA</button></form></div>"""
    else:twofa=f"""<div class=card><h2>Подключить 2FA</h2><ol><li>Установите приложение-аутентификатор.</li><li>Отсканируйте QR-код.</li><li>Введите появившийся шестизначный код.</li></ol><img class=qr src=/settings/2fa-qr.png alt='QR-код 2FA'><p>Ручной секрет:</p><div class=uri>{html.escape(u['totp_secret'])}</div><form method=post action=/settings/2fa-enable><label>Код из приложения</label><input name=code inputmode=numeric pattern="[0-9]{{6}}" maxlength=6 required><button class=btn>Включить 2FA</button></form></div>"""
-   credentials=f"""<div class=card><h2>Изменить логин</h2><p>Текущий логин: <b>{html.escape(u['username'])}</b>. Ссылки существующих подписок не изменятся.</p><form method=post action=/settings/change-login><label>Новый логин</label><input name=new_login minlength=8 maxlength=32 placeholder='familiaio' required><label>Текущий пароль</label><input type=password name=current_password required><button class=btn>Изменить логин</button></form></div><div class=card><h2>Изменить пароль</h2><p>Минимум 8 символов: строчная и заглавная буквы, цифра и специальный символ.</p><form method=post action=/settings/change-password><label>Текущий пароль</label><input type=password name=current_password required><label>Новый пароль</label><input type=password name=new_password minlength=8 required><label>Повторите новый пароль</label><input type=password name=confirm_password minlength=8 required><button class=btn>Изменить пароль</button></form></div>"""
+   account_name='администратора' if admin else 'аккаунта';credentials=f"""<div class=card><h2>Изменить логин {account_name}</h2><p>Текущий логин: <b>{html.escape(u['username'])}</b>. Ссылки существующих подписок не изменятся.</p><form method=post action=/settings/change-login><label>Новый логин</label><input name=new_login minlength=8 maxlength=32 placeholder='familiaio' required><label>Текущий пароль</label><input type=password name=current_password required><button class=btn>Изменить логин</button></form></div><div class=card><h2>Изменить пароль {account_name}</h2><p>Минимум 8 символов: строчная и заглавная буквы, цифра и специальный символ.</p><form method=post action=/settings/change-password><label>Текущий пароль</label><input type=password name=current_password required><label>Новый пароль</label><input type=password name=new_password minlength=8 required><label>Повторите новый пароль</label><input type=password name=confirm_password minlength=8 required><button class=btn>Изменить пароль</button></form></div>"""
    telegram_card=(f'''<div class=card><h2>Telegram привязан</h2><p>Telegram ID: <b>{int(u['telegram_id'])}</b>. Уведомления и управление подписками доступны в боте.</p></div>''' if u['telegram_id'] else '''<div class=card><h2>⚠ Telegram не привязан</h2><p>Без привязки не будут приходить уведомления об оплате, окончании подписки и технических работах.</p><a class="btn telegram-login" href=/link-telegram-start>✈ Привязать Telegram</a></div>''')
    email_card=f'''<div class=card><h2>Электронная почта</h2><p>{html.escape(u['email']) if u['email'] else 'Не указана'} · <b>{'подтверждена' if u['email_verified_at'] else 'не подтверждена'}</b></p><p>Почта используется для восстановления пароля и уведомлений о входе.</p></div>'''
    audit=''
@@ -1022,12 +1155,22 @@ class H(BaseHTTPRequestHandler):
     audit=f'''<details class="card security-log"><summary>Журнал безопасности</summary><p>Последние 50 входов и административных действий. Записи хранятся 90 дней; пароли и секреты сюда не попадают.</p><div class=tablewrap><table><tr><th>Время</th><th>Событие</th><th>Аккаунт</th><th>IP</th></tr>{event_rows}</table></div></details>'''
    return self.sendx(200,page('Безопасность',f"<section class=hero><h1>Безопасность аккаунта</h1><p>Двухфакторная защита и данные для входа.</p></section>{notice}<div class=manual>{email_card}{telegram_card}{twofa}{credentials}{audit}</div>",admin))
   if p=='/mode':
-   if not self.need():return
-   if not self.isadmin():return self.redir('/')
-   body=f'''<div class="card box"><h2>Выберите режим</h2><p>Административный режим предназначен для управления системой. Пользовательская проверка выполняется через отдельный тестовый аккаунт.</p><a class=btn href=/admin>⚙ Я администратор</a><a class="btn soft backbtn" href="{html.escape(TEST_ENTRY,quote=True)}">👤 Войти тестовым пользователем</a><a class="btn soft backbtn" href=/logout>Выйти</a></div>'''
+   active=self.who();admin=self.standby_admin() or (active if self.isadmin() else None)
+   if not admin:return self.redir('/' if active else '/login')
+   user_mode=bool(active and not self.isadmin());current='<div class=notice>Сейчас активен <b>отладочный пользовательский режим</b>.</div>' if user_mode else '<div class=notice>Сейчас активен режим администратора.</div>'
+   body=f'''<div class="card box"><h2>Выберите режим</h2>{current}<p>Пользовательский режим предназначен для проверки сайта, тарифов, заказов, подписок и клиентского интерфейса Telegram-бота. Административные права и отладочные данные хранятся раздельно.</p><a class=btn href=/switch/admin>⚙ Администрирование</a><a class="btn soft backbtn" href=/switch/user>🧪 Пользовательский режим</a><a class="btn soft backbtn" href=/logout>Завершить все сеансы</a></div>'''
    return self.sendx(200,page('Выбор режима',body))
+  if p=='/switch/user':
+   if not (self.standby_admin() or self.isadmin()):return self.sendx(403,'forbidden')
+   body='''<div class="card box"><h2>Войти как пользователь</h2><p>Введите логин и пароль администратора. Откроется отдельный личный профиль без доступа к функциям управления.</p><form method=post action=/switch/user><label>Логин администратора</label><input name=username autocomplete=username required autofocus><label>Пароль администратора</label><input type=password name=password autocomplete=current-password required><button class=btn>Открыть личный профиль</button></form><a class="btn soft backbtn" href=/mode>← Выбор режима</a></div>'''
+   return self.sendx(200,page('Вход в пользовательский режим',body))
+  if p=='/switch/admin':
+   admin=self.standby_admin()
+   if not admin:return self.redir(ADMIN_ENTRY)
+   return self.redir('/admin',f"vpn_session={self.cookie('vpn_admin_session')}; Path=/; Max-Age=28800; Secure; HttpOnly; SameSite=Strict")
   if p=='/':
    if not self.who():return self.redir('/login')
+   if self.isadmin():return self.redir('/mode')
    with db() as c:user_id=c.execute('SELECT id FROM users WHERE username=?',(self.who(),)).fetchone()['id']
    tariffs=available_tariffs(user_id);paid=[dict(x) for x in tariffs if not x['trial']];trials=[x for x in tariffs if x['trial']]
    devices=sorted({int(x['devices']) for x in paid});tariff_cards=[]
@@ -1143,14 +1286,6 @@ class H(BaseHTTPRequestHandler):
    with db() as c:tickets=c.execute("SELECT * FROM support_tickets WHERE source='guest' ORDER BY CASE WHEN status='closed' THEN 1 ELSE 0 END,updated_at DESC LIMIT 100").fetchall()
    rows=''.join(f"<tr><td>#{t['id']}</td><td>{html.escape(t['customer'] or '')}<br><small>{html.escape(t['guest_contact'] or 'контакт не указан')}</small></td><td>{html.escape({'open':'Ожидает ответа','answered':'Получен ответ','closed':'Закрыт'}.get(t['status'],t['status']))}</td><td>{time.strftime('%d.%m.%Y %H:%M',time.localtime(t['updated_at']))}</td><td><div class=admin-actions><a class=navbtn href='/admin/ticket?id={t['id']}'>Открыть чат</a><form method=post action=/admin/tickets/delete onsubmit=\"return confirm('Удалить гостевой чат #{t['id']}?')\"><input type=hidden name=ticket_id value={t['id']}><input type=hidden name=return_to value=guest><button class=delbtn>Удалить</button></form></div></td></tr>" for t in tickets) or '<tr><td colspan=5>Гостевых обращений пока нет</td></tr>'
    return self.sendx(200,page('Гостевой чат',f"<section class=hero><h1>Гостевой чат</h1><p>Отдельные обращения людей без регистрации и привязки Telegram.</p></section><div class=card><div class=tablewrap><table><tr><th>Чат</th><th>Гость</th><th>Статус</th><th>Обновлён</th><th>Управление</th></tr>{rows}</table></div></div>",True))
-  if p=='/admin/test-user':
-   if not self.isadmin():return self.sendx(403,'forbidden')
-   with db() as c:tests=c.execute("SELECT * FROM users WHERE role='test' ORDER BY id").fetchall()
-   params=parse_qs(urlparse(self.path).query);notice='<div class=notice>Данные тестового пользователя обновлены. Его предыдущие сеансы завершены.</div>' if params.get('saved') else ''
-   cards=''.join(f'''<div class=card><h2>{html.escape(test['username'])}</h2><form method=post action=/admin/test-user><input type=hidden name=action value=update><input type=hidden name=user_id value={test['id']}><label>Логин</label><input name=username minlength=8 maxlength=32 value="{html.escape(test['username'],quote=True)}" required><label>Новый пароль</label><input name=password type=password minlength=8 placeholder="Не заполняйте, если не меняете"><label>Повторите пароль</label><input name=password_confirm type=password minlength=8><button class=btn>Сохранить</button></form><a class="btn soft backbtn" href="{html.escape(TEST_ENTRY,quote=True)}">Открыть форму входа</a></div>''' for test in tests) or '<div class=card><h2>Тестовых пользователей пока нет</h2></div>'
-   create='''<div class=card><h2>Добавить тестового пользователя</h2><form method=post action=/admin/test-user><input type=hidden name=action value=create><label>Логин</label><input name=username minlength=8 maxlength=32 placeholder="test-user" required><label>Пароль</label><input name=password type=password minlength=8 required><label>Повторите пароль</label><input name=password_confirm type=password minlength=8 required><button class=btn>Создать</button></form></div>'''
-   body=f'''<section class=hero><h1>Тестовые пользователи</h1><p>Несколько изолированных аккаунтов для проверки сайта и Telegram-бота.</p></section>{notice}<div class=tariff-admin-grid>{cards}{create}</div><p><small>Логин: 8–32 символа, обязательны латинские буквы; цифры и дефис разрешены. Пароль: строчная и заглавная буквы, цифра и специальный символ.</small></p>'''
-   return self.sendx(200,page('Тестовые пользователи',body,True))
   if p=='/admin/ticket':
    if not self.isadmin():return self.sendx(403,'forbidden')
    try:ticket_id=int(parse_qs(urlparse(self.path).query).get('id',[0])[0])
@@ -1178,8 +1313,9 @@ class H(BaseHTTPRequestHandler):
   if p=='/admin/mail/settings':
    if not self.isadmin():return self.sendx(403,'forbidden')
    settings=mail_settings();params=parse_qs(urlparse(self.path).query);notice='<div class=notice>Настройки почты сохранены.</div>' if params.get('saved') else ('<div class=notice>Соединение и отправка тестового письма выполнены успешно.</div>' if params.get('tested') else '')
-   checked=lambda value:'checked' if value else ''
-   form=f'''<div class=card><h2>SMTP — отправка</h2><form method=post action=/admin/mail/settings><label>SMTP-сервер</label><input name=smtp_host value="{html.escape(str(settings.get('smtp_host') or ''),quote=True)}" placeholder=mail.my.domain.ru required><label>Порт</label><input type=number name=smtp_port value="{int(settings.get('smtp_port') or 587)}" required><label>Логин</label><input name=smtp_username value="{html.escape(str(settings.get('smtp_username') or ''),quote=True)}"><label>Новый пароль приложения</label><input type=password name=smtp_password autocomplete=new-password placeholder="Оставьте пустым, чтобы не менять"><label><input type=checkbox name=smtp_starttls value=1 {checked(settings.get('smtp_starttls'))}> STARTTLS</label><label><input type=checkbox name=smtp_ssl value=1 {checked(settings.get('smtp_ssl'))}> SSL/TLS с подключения</label><label>Адрес отправителя</label><input type=email name=mail_from value="{html.escape(str(settings.get('mail_from') or 'support@my.domain.ru'),quote=True)}" required><label>Reply-To</label><input type=email name=reply_to value="{html.escape(str(settings.get('reply_to') or 'support@my.domain.ru'),quote=True)}" required><h2>IMAP — входящие письма</h2><label>IMAP-сервер</label><input name=imap_host value="{html.escape(str(settings.get('imap_host') or ''),quote=True)}" placeholder=mail.my.domain.ru><label>Порт</label><input type=number name=imap_port value="{int(settings.get('imap_port') or 993)}"><label>Логин</label><input name=imap_username value="{html.escape(str(settings.get('imap_username') or ''),quote=True)}"><label>Новый пароль приложения</label><input type=password name=imap_password autocomplete=new-password placeholder="Оставьте пустым, чтобы не менять"><label><input type=checkbox name=imap_ssl value=1 {checked(settings.get('imap_ssl'))}> IMAP через SSL/TLS</label><button class=btn>Сохранить настройки</button></form><form method=post action=/admin/mail/test><label>Куда отправить тестовое письмо</label><input type=email name=test_email value="{html.escape(str(settings.get('mail_from') or 'support@my.domain.ru'),quote=True)}" required><button class="btn soft">Проверить SMTP и IMAP</button></form><p><small>Пароль хранится в базе в зашифрованном виде и никогда не показывается повторно. Для порта 465 обычно используется SSL; для 587 — STARTTLS.</small></p></div>'''
+   smtp_security='ssl' if settings.get('smtp_ssl') else 'starttls';imap_security='ssl' if settings.get('imap_ssl') else 'starttls';key_status='отдельный ключ' if MAIL_SETTINGS_KEY else 'совместимый режим';configured=bool(settings.get('smtp_host'))
+   status=f'''<div class=callout><b>{'✅ SMTP настроен' if configured else '⚠️ SMTP не настроен'}</b><p>Секреты: {key_status}. Пароли не отображаются и не попадают в журнал.</p></div>'''
+   form=f'''{status}<div class=card><h2>SMTP — отправка</h2><form method=post action=/admin/mail/settings><label>SMTP-сервер</label><input name=smtp_host value="{html.escape(str(settings.get('smtp_host') or ''),quote=True)}" placeholder=mail.my.domain.ru required><label>Порт</label><input type=number name=smtp_port value="{int(settings.get('smtp_port') or 587)}" required><label>Защита соединения</label><select name=smtp_security><option value=starttls {'selected' if smtp_security=='starttls' else ''}>STARTTLS (обычно порт 587)</option><option value=ssl {'selected' if smtp_security=='ssl' else ''}>SSL/TLS (обычно порт 465)</option></select><label>Логин</label><input name=smtp_username value="{html.escape(str(settings.get('smtp_username') or ''),quote=True)}"><label>Новый пароль приложения</label><input type=password name=smtp_password autocomplete=new-password placeholder="Оставьте пустым, чтобы не менять"><label>Адрес отправителя</label><input type=email name=mail_from value="{html.escape(str(settings.get('mail_from') or 'support@my.domain.ru'),quote=True)}" required><label>Reply-To</label><input type=email name=reply_to value="{html.escape(str(settings.get('reply_to') or 'support@my.domain.ru'),quote=True)}" required><h2>IMAP — входящие (необязательно)</h2><label>IMAP-сервер</label><input name=imap_host value="{html.escape(str(settings.get('imap_host') or ''),quote=True)}" placeholder=mail.my.domain.ru><label>Порт</label><input type=number name=imap_port value="{int(settings.get('imap_port') or 993)}"><label>Защита соединения</label><select name=imap_security><option value=ssl {'selected' if imap_security=='ssl' else ''}>SSL/TLS (обычно порт 993)</option><option value=starttls {'selected' if imap_security=='starttls' else ''}>STARTTLS</option></select><label>Логин</label><input name=imap_username value="{html.escape(str(settings.get('imap_username') or ''),quote=True)}"><label>Новый пароль приложения</label><input type=password name=imap_password autocomplete=new-password placeholder="Оставьте пустым, чтобы не менять"><button class=btn>Сохранить настройки</button></form><form method=post action=/admin/mail/test><label>Куда отправить тестовое письмо</label><input type=email name=test_email value="{html.escape(str(settings.get('mail_from') or 'support@my.domain.ru'),quote=True)}" required><button class="btn soft">Проверить SMTP и IMAP</button></form><p><small>Используйте отдельный пароль приложения, а не основной пароль почтового ящика.</small></p></div>'''
    return self.sendx(200,page('Настройка почты',f'<section class=hero><h1>Настройка почтового сервера</h1><p>Ящик поддержки, регистрационные письма и почтовый клиент.</p></section>{notice}{form}<a class="btn soft backbtn" href=/admin/mail>← Почтовый клиент</a>',True))
   if p=='/admin/mail/message':
    if not self.isadmin():return self.sendx(403,'forbidden')
@@ -1202,24 +1338,14 @@ class H(BaseHTTPRequestHandler):
    compose='''<div class=card><h2>Новое письмо</h2><form method=post action=/admin/mail/send><label>Кому</label><input type=email name=to required><label>Тема</label><input name=subject maxlength=200 required><label>Сообщение</label><textarea name=body maxlength=20000 required></textarea><button class=btn>Отправить</button></form></div>'''
    campaign='''<div class=card><h2>Массовая рассылка</h2><form method=post action=/admin/mail/campaign onsubmit="return confirm('Запустить рассылку выбранной аудитории?')"><label>Аудитория</label><select name=audience><option value=marketing>Подписались на новости</option><option value=active>Клиенты с действующей подпиской — сервисное уведомление</option></select><label>Тема</label><input name=subject maxlength=200 required><label>Сообщение</label><textarea name=body maxlength=20000 required></textarea><label class=consent><input type=checkbox name=confirmed value=1 required> Я проверил текст и аудиторию</label><button class=btn>Создать рассылку</button></form></div>'''
    return self.sendx(200,page('Почта',f'''<section class=hero><h1>Почта поддержки</h1><p>{html.escape(str(settings.get('mail_from') or 'support@my.domain.ru'))}</p><a class="btn soft" href=/admin/mail/settings>⚙ Настроить SMTP и IMAP</a></section>{inbox_error}<div class=card><h2>Входящие</h2><div class=tablewrap><table><tr><th>Дата</th><th>Отправитель</th><th>Тема</th></tr>{rows}</table></div></div><div class=manual>{compose}{campaign}</div><br><div class=card><h2>История рассылок</h2><div class=tablewrap><table><tr><th>ID</th><th>Тема</th><th>Аудитория</th><th>Статус</th><th>Отправлено</th><th>Ошибки</th></tr>{campaign_rows}</table></div></div>''',True))
-  if p=='/admin/backups':
+  if p=='/admin/settings':
    if not self.isadmin():return self.sendx(403,'forbidden')
-   try:data=backup_control('list');agent=backup_control('agent-status')
-   except Exception as error:return self.sendx(503,page('Резервные копии',f'<div class="card box"><h2 class=err>Модуль резервных копий недоступен</h2><p>{html.escape(str(error))}</p></div>',True))
-   state=data.get('state') or {};state_name={'queued':'В очереди','running':'Выполняется','success':'Успешно','error':'Ошибка'}.get(state.get('status'),'Нет операций');state_class='ok' if state.get('status')=='success' else ('bad' if state.get('status')=='error' else 'wait')
-   status=f'''<div class="callout {state_class}"><b>Последняя операция: {html.escape(state_name)}</b><p>{html.escape(str(state.get('message') or 'Операций ещё не было'))}</p>{'<p>Архив: <code>'+html.escape(str(state.get('archive')))+'</code></p>' if state.get('archive') else ''}</div>'''
-   cards=[]
-   for item in data.get('archives') or []:
-    name=str(item.get('name') or '');valid=bool(item.get('valid'));created=time.strftime('%d.%m.%Y %H:%M',time.localtime(int(item.get('created_at') or 0)))
-    restore=f'''<form method=post action=/admin/backups/restore onsubmit="return confirm('Запустить восстановление из {html.escape(name)}? Перед изменением будет создана страховочная копия.')"><input type=hidden name=archive value="{html.escape(name,quote=True)}"><label>Что восстановить</label><select name=scope><option value=all>Сайт и 3x-ui — базы данных</option><option value=site>Только сайт</option><option value=xui>Только 3x-ui</option><option value=full>Полностью: базы, настройки и TLS</option></select><label>Для подтверждения введите имя архива</label><input name=confirmation autocomplete=off placeholder="{html.escape(name,quote=True)}" required><button class=delbtn>Восстановить</button></form>''' if valid else '<p class=err>Архив повреждён или имеет неизвестный формат.</p>'
-    cards.append(f'''<article class=card><span class=eyebrow>{created}</span><h2>{html.escape(name)}</h2><p>{format_bytes(int(item.get('size') or 0))} · {'проверен' if valid else 'недоступен'}</p>{restore}</article>''')
-   archive_cards=''.join(cards) or '<div class="card box"><h2>Копий пока нет</h2><p>Создайте первую резервную копию кнопкой выше.</p></div>'
-   polling='<script>setTimeout(function(){location.reload()},5000)</script>' if state.get('status') in ('queued','running') else ''
-   local_state='<b class=ok>Работает</b>' if agent.get('local_timer') else '<b class=bad>Остановлен</b>';agent_state='<b class=ok>Работает</b>' if agent.get('full_agent_timer') else ('<b class=warn>Установлен, но остановлен</b>' if agent.get('full_agent_installed') else '<b class=bad>Не установлен</b>');remote_state='<b class=ok>Настроен</b>' if agent.get('remote_configured') else '<b class=warn>Не подключён</b>'
-   remote_button=f'<a class=btn href="{html.escape(BACKUP_PANEL_URL,quote=True)}" target=_blank rel=noopener>Открыть Backup-сервер</a>' if BACKUP_PANEL_URL else '<p><small>URL панели задаётся через <code>BACKUP_PANEL_URL</code>.</small></p>'
-   dashboard=f'''<div class=tariff-admin-grid><article class=card><span class=eyebrow>На этом сервере</span><h2>Локальные копии</h2><p>Расписание: {local_state}<br>Архивов: <b>{len(data.get('archives') or [])}</b></p><form method=post action=/admin/backups/create><button class=btn>＋ Создать сейчас</button></form></article><article class=card><span class=eyebrow>Передача наружу</span><h2>Backup-агент</h2><p>Служба: {agent_state}<br>Приёмник: {remote_state}<br>ID: <code>{html.escape(str(agent.get('server_id') or 'не задан'))}</code></p><small>Настройка: <code>sudo home-vpn-setup backup-remote</code> или компонент «Backup-агент».</small></article><article class=card><span class=eyebrow>Центральное хранилище</span><h2>Backup-сервер</h2><p>Независимые конфигурации, серверы и архивы управляются в единой панели хранилища.</p>{remote_button}</article></div>'''
-   body=f'''<section class=hero><h1>Резервное копирование</h1><p>Локальные архивы, Backup-агент и центральный Backup-сервер в одном разделе.</p></section>{dashboard}{status}<div class="callout warn"><b>Перед восстановлением</b><p>Пользователи могут потерять изменения, сделанные после выбранной даты. Система автоматически создаст страховочную копию текущего состояния и проверит целостность архива. Полное восстановление также заменяет настройки и TLS-файлы.</p></div><h2>Локальные архивы</h2><div class=tariff-admin-grid>{archive_cards}</div><div class=card><h2>Восстановление через SSH</h2><p>Проверить архивы: <code>sudo home-vpn-restore list</code></p><p>Восстановить обе базы: <code>sudo home-vpn-restore restore ИМЯ_АРХИВА all</code></p><p>Подробная инструкция находится в <code>docs/backup-and-restore.md</code> проекта.</p></div>{polling}'''
-   return self.sendx(200,page('Резервные копии',body,True))
+   bot_link=f'<a class=admin-link href="{html.escape(BOT_ADMIN_URL,quote=True)}" target=_blank rel=noopener>🤖 Telegram-бот<small>Параметры и состояние бота</small></a>' if BOT_ADMIN_URL else ''
+   commerce='''<section class=settings-group><div><span class=eyebrow>Продажи</span><h2>Тарифы и оплата</h2><p>Всё, что видит клиент при выборе и оплате подписки.</p></div><div class=admin-link-grid><a class=admin-link href=/admin/tariffs>💰 Тарифы<small>Цены, сроки и промокоды для сайта и Telegram</small></a><a class=admin-link href=/admin/payment>💳 Способ оплаты<small>Ручное подтверждение или ЮKassa</small></a></div></section>'''
+   service='''<section class=settings-group><div><span class=eyebrow>Сервис</span><h2>Основные настройки</h2><p>Оформление, серверы и безопасность панели.</p></div><div class=admin-link-grid><a class=admin-link href=/admin/config>🎨 Сервис и узлы<small>Название, описание и параметры VPN-серверов</small></a><a class=admin-link href=/admin/servers>🖥 Состояние серверов<small>Нагрузка и режим обслуживания</small></a><a class=admin-link href=/settings/security>🔐 Безопасность<small>Пароль администратора и двухфакторная защита</small></a></div></section>'''
+   communications=f'''<section class=settings-group><div><span class=eyebrow>Коммуникации</span><h2>Каналы связи</h2><p>Почта, Telegram и сообщения для пользователей.</p></div><div class=admin-link-grid><a class=admin-link href=/admin/mail>✉ Почта<small>Входящие письма и рассылки</small></a><a class=admin-link href=/admin/mail/settings>📨 Почтовый сервер<small>SMTP и IMAP</small></a>{bot_link}<a class=admin-link href=/admin/maintenance>🛠 Техработы<small>Объявления и уведомления</small></a></div></section>'''
+   operations='''<section class=settings-group><div><span class=eyebrow>Эксплуатация</span><h2>Служебные функции</h2><p>Обращения пользователей и режим администратора.</p></div><div class=admin-link-grid><a class=admin-link href=/admin/guest-tickets>💬 Гостевые обращения<small>Сообщения без учётной записи</small></a><a class=admin-link href=/mode>👤 Режим работы<small>Переключение между администратором и пользователем</small></a></div></section>'''
+   return self.sendx(200,page('Настройки',f'''<section class="hero admin-home-hero"><span class=eyebrow>Центр управления</span><h1>Настройки</h1><p>Все параметры сервиса собраны по назначению. Изменения тарифов применяются одновременно на сайте и в Telegram-боте.</p></section>{commerce}{service}{communications}{operations}''',True))
   if p=='/admin/payment':
    if not self.isadmin():return self.sendx(403,'forbidden')
    cfg=json.loads(json.dumps(CONFIG));payment=cfg.get('payment') or {};selected_mode=str(payment.get('mode') or 'manual');params=parse_qs(urlparse(self.path).query)
@@ -1230,16 +1356,13 @@ class H(BaseHTTPRequestHandler):
    return self.sendx(200,page('Настройка оплаты',body,True))
   if p=='/admin/config':
    if not self.isadmin():return self.sendx(403,'forbidden')
-   cfg=json.loads(json.dumps(CONFIG));branding=cfg.get('branding') or {};pricing=cfg.get('pricing') or {};prices='\n'.join(f'{k}={v}' for k,v in sorted((pricing.get('device_monthly') or {}).items(),key=lambda x:int(x[0])))
+   cfg=json.loads(json.dumps(CONFIG));branding=cfg.get('branding') or {}
    flag_catalog=[('🌐','Другое / без страны'),('🇷🇺','Россия'),('🇵🇱','Польша'),('🇫🇮','Финляндия'),('🇸🇪','Швеция'),('🇳🇱','Нидерланды'),('🇩🇪','Германия'),('🇫🇷','Франция'),('🇬🇧','Великобритания'),('🇺🇸','США'),('🇨🇦','Канада'),('🇨🇭','Швейцария'),('🇪🇪','Эстония'),('🇱🇻','Латвия'),('🇱🇹','Литва'),('🇨🇿','Чехия'),('🇦🇹','Австрия'),('🇪🇸','Испания'),('🇮🇹','Италия'),('🇹🇷','Турция'),('🇯🇵','Япония'),('🇸🇬','Сингапур')]
    def flag_select(selected):
     selected=str(selected or '🌐');items=list(flag_catalog)
     if selected not in {x[0] for x in items}:items.insert(0,(selected,'Текущий пользовательский флаг'))
     return ''.join(f'<option value="{html.escape(flag,quote=True)}" {"selected" if flag==selected else ""}>{html.escape(flag)} {html.escape(label)}</option>' for flag,label in items)
    branding_form=f'''<div class=card><h2>Название и описание</h2><form method=post action=/admin/config/branding><label>Название</label><input name=name maxlength=40 value="{html.escape(str(branding.get('name','HOME-VPN')),quote=True)}" required><label>Слоган</label><input name=tagline maxlength=80 value="{html.escape(str(branding.get('tagline','Домашняя свобода')),quote=True)}"><label>Подзаголовок</label><input name=subtitle maxlength=120 value="{html.escape(str(branding.get('subtitle','Безопасный интернет каждый день')),quote=True)}"><button class=btn>Сохранить оформление</button></form></div>'''
-   payment_form='''<div class=card><h2>Оплата</h2><p>Ручной режим и ЮKassa управляются в отдельном разделе.</p><a class=btn href=/admin/payment>Открыть настройку оплаты</a></div>'''
-   period_fields=''.join(f'''<div class=card><h3>{html.escape(code)}</h3><label>Название</label><input name="period_{html.escape(code)}_name" value="{html.escape(str(info.get('name',code)),quote=True)}"><label>Дней</label><input type=number min=1 name="period_{html.escape(code)}_days" value="{int(info.get('days',30))}"><label>Множитель цены</label><input type=number min=0 step=.01 name="period_{html.escape(code)}_multiplier" value="{float(info.get('multiplier',1))}"></div>''' for code,info in (pricing.get('periods') or {}).items())
-   pricing_form=f'''<div class=card><h2>Тарифы</h2><p>Изменения сразу применяются на сайте и передаются Telegram-боту.</p><form method=post action=/admin/config/pricing><label>Валюта</label><input name=currency value="{html.escape(str(pricing.get('currency','₽')),quote=True)}" required><label>Цены за 1 месяц</label><textarea name=device_prices required placeholder="1=100&#10;2=190">{html.escape(prices)}</textarea><small>Одна строка на вариант: количество устройств = цена. Максимальное число устройств определяется последней строкой.</small><label>Лимит трафика, ГБ</label><input type=number min=0 name=traffic_gb value="{int(pricing.get('traffic_gb',0))}"><small>0 — без ограничений.</small><label><input type=checkbox name=trial_enabled value=1 {'checked' if (pricing.get('trial') or {}).get('enabled',True) else ''}> Пробный тариф включён</label><label>Название пробного тарифа</label><input name=trial_name value="{html.escape(str((pricing.get('trial') or {}).get('name','Пробный')),quote=True)}"><label>Дней</label><input type=number min=1 name=trial_days value="{int((pricing.get('trial') or {}).get('days',3))}"><label>Устройств</label><input type=number min=1 name=trial_devices value="{int((pricing.get('trial') or {}).get('devices',1))}"><h3>Периоды</h3><div class=plans>{period_fields}</div><button class=btn>Сохранить тарифы</button></form></div>'''
    node_forms=[]
    for index,node in enumerate(cfg.get('nodes') or []):
     routes='\n'.join('|'.join((str(r.get('name','')),str(r.get('inbound_id','')),str(r.get('protocol','vless')),str(r.get('transport','tcp')))) for r in node.get('routes') or []);inbounds=','.join(map(str,node.get('inbound_ids') or []))
@@ -1248,8 +1371,7 @@ class H(BaseHTTPRequestHandler):
     node_forms.append(f'''<div class=card><h2>{'⭐ ' if node.get('primary') else ''}{html.escape(str(node.get('name','Нода')))}</h2><form method=post action=/admin/config/node><input type=hidden name=index value={index}><label>ID</label><input name=node_id value="{html.escape(str(node.get('id','')),quote=True)}" required><label>Название</label><input name=name value="{html.escape(str(node.get('name','')),quote=True)}" required><label>Страна</label><input name=country value="{html.escape(str(node.get('country','')),quote=True)}"><label>Флаг</label><select name=flag>{flag_select(node.get('flag','🌐'))}</select><label>URL API 3x-ui</label><input name=panel_url value="{html.escape(str(node.get('panel_url','')),quote=True)}"><label>Переменная окружения с API-токеном</label><input name=token_env value="{html.escape(str(node.get('token_env','XUI_TOKEN')),quote=True)}" readonly><small>Секрет хранится только в /etc/vpn-shop.env. После добавления ноды нажмите синхронизацию.</small><label>Inbound ID через запятую</label><input name=inbound_ids value="{html.escape(inbounds,quote=True)}"><label>Существующий домен подписки</label><input name=subscription_base_url value="{html.escape(str(node.get('subscription_base_url','')),quote=True)}"><label>Вес при распределении</label><input type=number min=1 max=100 name=weight value="{int(node.get('weight',100))}"><label>Маршруты</label><textarea name=routes placeholder="reality|1|vless|tcp">{html.escape(routes)}</textarea><label><input type=checkbox name=primary value=1 {'checked' if node.get('primary') else ''}> Основная нода</label><label><input type=checkbox name=enabled value=1 {'checked' if node.get('enabled',True) else ''}> Включена</label><label><input type=checkbox name=accept_new value=1 {'checked' if node.get('accept_new',True) else ''}> Выдавать новым пользователям</label><label><input type=checkbox name=maintenance value=1 {'checked' if node.get('maintenance',False) else ''}> Техническое обслуживание</label><button class=btn>Сохранить ноду</button></form>{sync}{delete}</div>''')
    new_node=f'''<div class=card><h2>Добавить сервер</h2><form method=post action=/admin/config/node><input type=hidden name=index value=new><label>ID</label><input name=node_id placeholder=pl-2 required><label>Название</label><input name=name placeholder="PL — дополнительный" required><label>Страна</label><input name=country placeholder=PL><label>Флаг</label><select name=flag>{flag_select('🌐')}</select><label>URL API</label><input name=panel_url placeholder="https://node2.my.domain.ru:2053/panel-path"><label>Переменная окружения с API-токеном</label><input name=token_env placeholder=PL_XUI_TOKEN><label>Inbound ID через запятую</label><input name=inbound_ids placeholder=1,2,3><label>Вес при распределении</label><input type=number min=1 max=100 name=weight value=100><label>Маршруты</label><textarea name=routes placeholder="reality|1|vless|tcp&#10;xhttp|2|vless|xhttp"></textarea><label><input type=checkbox name=enabled value=1 checked> Включен</label><label><input type=checkbox name=accept_new value=1 checked> Выдавать новым пользователям</label><button class=btn>Добавить сервер</button></form></div>'''
    params=parse_qs(urlparse(self.path).query);notice='<div class=notice>Настройки сохранены и уже применены.</div>' if params.get('saved') else ''
-   console='''<div class="callout warn"><b>Домен и TLS меняются только в консоли.</b><br>Это защищает сертификаты и закрытые ключи от доступа веб-приложения.<br><span class=code>sudo home-vpn-setup tls</span></div>'''
-   return self.sendx(200,page('Настройки сервиса',f'''<section class=hero><h1>Настройки {html.escape(BRAND_NAME)}</h1><p>Название, тарифы, лимиты, серверы и маршрутизация.</p></section>{notice}{console}<div class=manual>{branding_form}{payment_form}{pricing_form}</div><br><div class=manual>{''.join(node_forms)}{new_node}</div>''',True))
+   return self.sendx(200,page('Сервис и узлы',f'''<section class=hero><span class=eyebrow>Настройки · Сервис</span><h1>Сервис и VPN-узлы</h1><p>Оформление сайта и технические параметры серверов. Тарифы и оплата вынесены в отдельную понятную группу.</p><a class="btn soft" href=/admin/settings>← Все настройки</a></section>{notice}<div class=manual>{branding_form}</div><h2 id=servers>VPN-серверы</h2><div class=manual>{''.join(node_forms)}{new_node}</div>''',True))
   if p=='/admin/status':
    if not self.isadmin():return self.sendx(403,'forbidden')
    s=status_data();primary_ok=str(s.get('panel')).lower()=='online' and str(s.get('xray')).lower() in ('online','running','active','true')
@@ -1262,7 +1384,7 @@ class H(BaseHTTPRequestHandler):
    for node in metrics:
     state=badge('online' if node.get('online') else 'offline');mode='Обслуживание' if node.get('maintenance') else ('Новых не принимать' if not node.get('accept_new') else 'Принимает новых')
     rows+=f'''<tr><td><b>{html.escape(node['flag'])} {html.escape(str(node['name']))}</b><br><small>{html.escape(str(node['country']))}</small></td><td>{state}<br>{mode}</td><td>{node.get('cpu','—')}%</td><td>{node.get('ram_percent','—')}%</td><td>{node.get('disk_percent','—')}%</td><td>{format_bytes(node.get('network_down',0))} ↓ / {format_bytes(node.get('network_up',0))} ↑</td><td>{node.get('active_users',0)}</td><td>{format_bytes(node.get('traffic_received',0)+node.get('traffic_sent',0))}</td><td>{node.get('weight',100)}</td></tr>'''
-   actions='''<div class=card><h2>Массовое обслуживание</h2><p>Режим обслуживания исключает узлы из автоматической выдачи новым пользователям. Действующие подписки не удаляются.</p><div class=admin-actions><form method=post action=/admin/servers/mass><input type=hidden name=action value=maintenance_on><button class=delbtn>Начать обслуживание всех узлов</button></form><form method=post action=/admin/servers/mass><input type=hidden name=action value=maintenance_off><button class=approvebtn>Завершить обслуживание</button></form><a class=navbtn href=/admin/config>Изменить вес и режим отдельного узла</a></div></div>'''
+   actions='''<div class=card><h2>Массовое обслуживание</h2><p>Режим обслуживания исключает узлы из автоматической выдачи новым пользователям. Действующие подписки не удаляются.</p><div class=admin-actions><form method=post action=/admin/servers/mass><input type=hidden name=action value=maintenance_on><button class=delbtn>Начать обслуживание всех узлов</button></form><form method=post action=/admin/servers/mass><input type=hidden name=action value=maintenance_off><button class=approvebtn>Завершить обслуживание</button></form><a class=navbtn href=/admin/config#servers>Изменить параметры узлов</a></div></div>'''
    return self.sendx(200,page('Управление серверами',f'''<section class=hero><h1>Управление серверами</h1><p>Новые пользователи автоматически получают предпочтительный узел с учётом нагрузки, веса и режима обслуживания.</p></section><div class=card><div class=tablewrap><table><tr><th>Страна / узел</th><th>Доступность</th><th>CPU</th><th>RAM</th><th>Диск</th><th>Сеть сейчас</th><th>Активные</th><th>Трафик узла</th><th>Вес</th></tr>{rows}</table></div></div><br>{actions}''',True))
   if p=='/admin/maintenance':
    if not self.isadmin():return self.sendx(403,'forbidden')
@@ -1327,37 +1449,21 @@ class H(BaseHTTPRequestHandler):
    r=xapi('GET','/panel/api/clients/links/'+quote(email));links=r.get('obj') or []
    if not r.get('success') or not links:return self.sendx(404,'subscription not found','text/plain')
    payload=base64.b64encode(('\n'.join(links)).encode());self.send_response(200);self.send_header('Content-Type','text/plain; charset=utf-8');self.send_header('Profile-Title',BRAND_NAME);self.send_header('Profile-Update-Interval','12');self.send_header('Content-Length',str(len(payload)));self.end_headers();self.wfile.write(payload);return
-  if p=='/api/bot/test-users':
-   if self.headers.get('X-API-Key')!=API_SECRET:return self.jout(403,{'error':'forbidden'})
-   tgid=int(parse_qs(urlparse(self.path).query).get('telegram_id',[0])[0] or 0)
-   if tgid!=ADMIN_TG:return self.jout(403,{'error':'Доступно только администратору'})
-   with db() as c:items=[dict(x) for x in c.execute("SELECT id,username FROM users WHERE role='test' AND blocked_at IS NULL ORDER BY username")]
-   return self.jout(200,{'users':items})
   if p=='/api/bot/clients':
    if self.headers.get('X-API-Key')!=API_SECRET:return self.jout(403,{'error':'forbidden'})
-   query=parse_qs(urlparse(self.path).query);tgid=int(query.get('telegram_id',[0])[0]);test_username=str(query.get('test_username',[''])[0]).strip();items=[]
+   query=parse_qs(urlparse(self.path).query);tgid=int(query.get('telegram_id',[0])[0]);items=[]
    if tgid<=0:return self.jout(400,{'error':'bad telegram id'})
-   selected=None
-   if test_username:
-    if tgid!=ADMIN_TG:return self.jout(403,{'error':'Доступно только администратору'})
-    with db() as c:selected=c.execute("SELECT id FROM users WHERE username=? AND role='test' AND blocked_at IS NULL",(test_username,)).fetchone()
-    if not selected:return self.jout(404,{'error':'Тестовый пользователь не найден'})
-   source=account_clients(selected['id'],None) if selected else panel_clients()
-   for x in source:
-    if selected or int(x.get('tgId') or 0)==tgid:items.append({'email':x.get('email'),'enable':x.get('enable'),'expiryTime':x.get('expiryTime'),'limitIp':x.get('limitIp'),'usedDevices':used_devices(x.get('email','')),'scheduledChanges':[{'limitIp':r['limit_ip'],'effectiveAt':r['effective_at']} for r in scheduled_for(x.get('email',''))],'subscription_url':subscription_url(x.get('email',''))})
+   for x in panel_clients():
+    if int(x.get('tgId') or 0)==tgid:items.append({'email':x.get('email'),'enable':x.get('enable'),'expiryTime':x.get('expiryTime'),'limitIp':x.get('limitIp'),'usedDevices':used_devices(x.get('email','')),'scheduledChanges':[{'limitIp':r['limit_ip'],'effectiveAt':r['effective_at']} for r in scheduled_for(x.get('email',''))],'subscription_url':subscription_url(x.get('email',''))})
    return self.jout(200,{'clients':items})
   if p=='/api/bot/pending-orders':
    if self.headers.get('X-API-Key')!=API_SECRET:return self.jout(403,{'error':'forbidden'})
-   q=parse_qs(urlparse(self.path).query);tgid=int(q.get('telegram_id',[0])[0] or 0);admin=q.get('admin',['0'])[0]=='1';test_username=str(q.get('test_username',[''])[0]).strip();selected=None
+   q=parse_qs(urlparse(self.path).query);tgid=int(q.get('telegram_id',[0])[0] or 0);admin=q.get('admin',['0'])[0]=='1'
    if not tgid:return self.jout(400,{'error':'bad telegram id'})
-   if admin and tgid!=ADMIN_TG:return self.jout(403,{'error':'Доступно только администратору'})
-   if test_username and not admin:
-    if tgid!=ADMIN_TG:return self.jout(403,{'error':'Доступно только администратору'})
-    with db() as c:selected=c.execute("SELECT id FROM users WHERE username=? AND role='test' AND blocked_at IS NULL",(test_username,)).fetchone()
-    if not selected:return self.jout(404,{'error':'Тестовый пользователь не найден'})
+   if admin and tgid!=admin_telegram_id():return self.jout(403,{'error':'Доступно только администратору'})
    with db() as c:
     c.execute("UPDATE orders SET status='expired',error='Истекло время оплаты' WHERE status IN ('pending','error') AND expires_at IS NOT NULL AND expires_at<=?",(int(time.time()),))
-    rows=c.execute("SELECT * FROM orders WHERE status IN ('pending','processing','review','payment_pending','payment_error','error') ORDER BY id DESC LIMIT 20").fetchall() if admin else (c.execute("SELECT * FROM orders WHERE user_id=? AND status IN ('pending','processing','review','payment_pending','payment_error','error') ORDER BY id DESC LIMIT 20",(selected['id'],)).fetchall() if selected else c.execute("SELECT * FROM orders WHERE telegram_id=? AND status IN ('pending','processing','review','payment_pending','payment_error','error') ORDER BY id DESC LIMIT 20",(tgid,)).fetchall())
+    rows=c.execute("SELECT * FROM orders WHERE status IN ('pending','processing','review','payment_pending','payment_error','error') ORDER BY id DESC LIMIT 20").fetchall() if admin else c.execute("SELECT * FROM orders WHERE telegram_id=? AND status IN ('pending','processing','review','payment_pending','payment_error','error') ORDER BY id DESC LIMIT 20",(tgid,)).fetchall()
    items=[]
    for row in rows:
     x=dict(row);x['pay_url']=PUBLIC+'/pay/'+x['token'];x['payment_url']=x['pay_url']+'/start';x['payment_method']=payment_mode();x['payment_reference']=payment_reference(x['id'])
@@ -1370,8 +1476,12 @@ class H(BaseHTTPRequestHandler):
    s=status_data();s['checked_at']=int(time.time());return self.jout(200,s)
   if p=='/api/bot/catalog':
    if self.headers.get('X-API-Key')!=API_SECRET:return self.jout(403,{'error':'forbidden'})
+   query=parse_qs(urlparse(self.path).query);tgid=int(query.get('telegram_id',[0])[0] or 0);catalog_user_id=None
+   with db() as c:
+    if tgid:
+     selected=user_for_telegram(c,tgid,True);catalog_user_id=selected['id'] if selected and not selected['blocked_at'] else None
    periods={k:{'name':v[0],'days':v[1],'multiplier':v[2]} for k,v in PERIODS.items()};trial=PRICING.get('trial') or {}
-   tariffs=[{'code':x['code'],'name':x['name'],'days':x['days'],'devices':x['devices'],'traffic_gb':x['traffic_gb'],'price':x['price'],'trial':bool(x['trial']),'renewal':bool(x['renewal'])} for x in available_tariffs(None)]
+   tariffs=[{'code':x['code'],'name':x['name'],'days':x['days'],'devices':x['devices'],'traffic_gb':x['traffic_gb'],'price':x['price'],'trial':bool(x['trial']),'renewal':bool(x['renewal']),'personal':bool(x['personal_user_id'])} for x in available_tariffs(catalog_user_id)]
    return self.jout(200,{'branding':BRANDING,'currency':CURRENCY,'traffic_gb':TRAFFIC_GB,'max_devices':MAX_DEVICES,'device_monthly':DEVICE_MONTH,'periods':periods,'trial':trial,'tariffs':tariffs,'payment':{'mode':payment_mode(),'name':'ЮKassa' if payment_mode()=='yookassa' else PAYMENT_PROVIDER,'configured':yookassa_ready() if payment_mode()=='yookassa' else True},'nodes':[{'id':x.get('id'),'name':x.get('name'),'country':x.get('country'),'flag':x.get('flag'),'primary':bool(x.get('primary')),'routes':x.get('routes') or []} for x in NODES]})
   if p=='/api/bot/order-status':
    if self.headers.get('X-API-Key')!=API_SECRET:return self.jout(403,{'error':'forbidden'})
@@ -1383,13 +1493,16 @@ class H(BaseHTTPRequestHandler):
   if p=='/api/bot/profile':
    if self.headers.get('X-API-Key')!=API_SECRET:return self.jout(403,{'error':'forbidden'})
    tgid=int(parse_qs(urlparse(self.path).query).get('telegram_id',[0])[0])
-   with db() as c:r=c.execute('SELECT login,tg_username FROM bot_profiles WHERE telegram_id=?',(tgid,)).fetchone()
-   return self.jout(200,{'profile':dict(r) if r else None})
+   with db() as c:
+    r=c.execute('SELECT login,tg_username FROM bot_profiles WHERE telegram_id=?',(tgid,)).fetchone()
+    linked=user_for_telegram(c,tgid,True) if not r else None
+   profile=dict(r) if r else ({'login':linked['username'],'tg_username':linked['tg_username'],'linked_admin_profile':True} if linked else None)
+   return self.jout(200,{'profile':profile})
   if p=='/api/bot/tickets':
    if self.headers.get('X-API-Key')!=API_SECRET:return self.jout(403,{'error':'forbidden'})
    q=parse_qs(urlparse(self.path).query);tgid=int(q.get('telegram_id',[0])[0] or 0);ticket_id=int(q.get('id',[0])[0] or 0);admin=q.get('admin',['0'])[0]=='1'
    if not tgid:return self.jout(400,{'error':'bad telegram id'})
-   if admin and tgid!=ADMIN_TG:return self.jout(403,{'error':'Доступно только администратору'})
+   if admin and tgid!=admin_telegram_id():return self.jout(403,{'error':'Доступно только администратору'})
    with db() as c:
     if ticket_id:
      ticket=c.execute('SELECT * FROM support_tickets WHERE id=?',(ticket_id,)).fetchone()
@@ -1401,24 +1514,28 @@ class H(BaseHTTPRequestHandler):
    return self.jout(200,{'tickets':[dict(x) for x in rows]})
   if p=='/admin/tariffs':
    if not self.isadmin():return self.sendx(403,'forbidden')
-   params=parse_qs(urlparse(self.path).query);edit_id=int(params.get('edit',[0])[0] or 0);preview_id=int(params.get('preview',[0])[0] or 0)
+   params=parse_qs(urlparse(self.path).query);edit_id=int(params.get('edit',[0])[0] or 0);preview_id=int(params.get('preview',[0])[0] or 0);show_new=params.get('new',['0'])[0]=='1';show_archived=params.get('view',[''])[0]=='archived';show_promos=params.get('section',[''])[0]=='promos'
    with db() as c:tariffs=c.execute('SELECT t.*,u.username personal_username FROM tariffs t LEFT JOIN users u ON u.id=t.personal_user_id ORDER BY t.archived,t.trial DESC,t.days,t.devices').fetchall();promos=c.execute('SELECT * FROM promo_codes ORDER BY id DESC').fetchall();users=c.execute("SELECT id,username FROM users WHERE role!='admin' ORDER BY username").fetchall()
    current=next((x for x in tariffs if x['id']==edit_id),None);preview=next((x for x in tariffs if x['id']==preview_id),None)
+   visible_tariffs=[x for x in tariffs if bool(x['archived'])==show_archived];active_count=sum(1 for x in tariffs if not x['archived'] and x['active'] and x['effective_at']<=int(time.time()));draft_count=sum(1 for x in tariffs if not x['archived'] and (not x['active'] or x['effective_at']>int(time.time())));archive_count=sum(1 for x in tariffs if x['archived'])
    tariff_cards=[]
-   for x in tariffs:
+   for x in visible_tariffs:
     status='Архив' if x['archived'] else ('Опубликован' if x['active'] and x['effective_at']<=int(time.time()) else 'Запланирован' if x['active'] else 'Черновик');status_class='archived' if x['archived'] else ('published' if status=='Опубликован' else 'scheduled' if status=='Запланирован' else 'draft')
     personal=f'''<span>👤 {html.escape(x['personal_username'])}</span>''' if x['personal_username'] else '<span>👥 Для всех</span>';trial='<span>🎁 Пробный период</span>' if x['trial'] else '';renewal='<span>↻ Для продления</span>' if x['renewal'] else ''
     archive='' if x['archived'] else f'''<form method=post action=/admin/tariffs/archive onsubmit="return confirm('Переместить тариф в архив? Существующие заказы не изменятся.')"><input type=hidden name=tariff_id value={x['id']}><button class=delbtn>В архив</button></form>'''
-    tariff_cards.append(f'''<article class="card tariff-admin-card {'archived' if x['archived'] else ''}"><div class=tariff-card-head><div><div class=tariff-code>{html.escape(x['code'])}</div><h2>{html.escape(x['name'])}</h2></div><span class="tariff-status {status_class}">{status}</span></div><div class=tariff-admin-price>{x['price']} <small>{html.escape(CURRENCY)}</small></div><div class=tariff-admin-meta><span>📅 {x['days']} дней</span><span>📱 {x['devices']} устройств</span><span>📊 {'Без лимита' if not x['traffic_gb'] else str(x['traffic_gb'])+' ГБ'}</span>{personal}{trial}{renewal}</div><small>Цена действует с {time.strftime('%d.%m.%Y %H:%M',time.localtime(x['effective_at']))}</small><div class=admin-actions><a class=navbtn href=/admin/tariffs?preview={x['id']}>Предпросмотр</a><a class=navbtn href=/admin/tariffs?edit={x['id']}>Изменить</a>{archive}</div></article>''')
-   tariff_cards=''.join(tariff_cards) or '<div class="card box"><h2>Тарифов пока нет</h2><p>Создайте первый тариф в форме ниже.</p></div>'
+    tariff_cards.append(f'''<article class="card tariff-admin-card {'archived' if x['archived'] else ''}"><div class=tariff-card-head><div><div class=tariff-code>{html.escape(x['code'])}</div><h2>{html.escape(x['name'])}</h2></div><span class="tariff-status {status_class}">{status}</span></div><div class=tariff-admin-price>{x['price']} <small>{html.escape(CURRENCY)}</small></div><div class=tariff-admin-meta><span>📅 {x['days']} дн.</span><span>📱 {x['devices']} устр.</span><span>📊 {'Без лимита' if not x['traffic_gb'] else str(x['traffic_gb'])+' ГБ'}</span>{personal}{trial}{renewal}</div><small>{'Доступен сейчас' if x['active'] and x['effective_at']<=int(time.time()) else 'Начало: '+time.strftime('%d.%m.%Y %H:%M',time.localtime(x['effective_at']))}</small><div class=admin-actions><a class=navbtn href=/admin/tariffs?edit={x['id']}>✏ Изменить</a>{archive}</div></article>''')
+   tariff_cards=''.join(tariff_cards) or f'<div class="card box"><h2>{"Архив пуст" if show_archived else "Тарифов пока нет"}</h2><p>{"Архивные тарифы появятся здесь." if show_archived else "Нажмите «Новый тариф», чтобы добавить первый."}</p></div>'
    user_options='<option value="">Для всех пользователей</option>'+''.join(f'<option value={u["id"]} {"selected" if current and current["personal_user_id"]==u["id"] else ""}>{html.escape(u["username"])}</option>' for u in users)
    effective=time.strftime('%Y-%m-%dT%H:%M',time.localtime(current['effective_at'])) if current else time.strftime('%Y-%m-%dT%H:%M')
-   form=f'''<div class=card><h2>{'Изменить тариф' if current else 'Создать тариф'}</h2><form method=post action=/admin/tariffs/save><input type=hidden name=tariff_id value={current['id'] if current else ''}><label>Код тарифа</label><input name=code pattern="[a-zA-Z0-9_-]+" value="{html.escape(current['code'],quote=True) if current else ''}" required><label>Название</label><input name=name value="{html.escape(current['name'],quote=True) if current else ''}" required><div class=user-detail-grid><div><label>Срок, дней</label><input type=number name=days min=1 value={current['days'] if current else 30} required></div><div><label>Устройств</label><input type=number name=devices min=1 max=100 value={current['devices'] if current else 1} required></div><div><label>Трафик, ГБ</label><input type=number name=traffic_gb min=0 value={current['traffic_gb'] if current else 0}></div><div><label>Цена</label><input type=number name=price min=0 value={current['price'] if current else 100} required></div></div><label>Начало действия цены</label><input type=datetime-local name=effective_at value="{effective}" required><label>Персональный тариф</label><select name=personal_user_id>{user_options}</select><label><input type=checkbox name=renewal value=1 {'checked' if not current or current['renewal'] else ''}> Разрешить для продления</label><label><input type=checkbox name=trial value=1 {'checked' if current and current['trial'] else ''}> Пробный период</label><label><input type=checkbox name=active value=1 {'checked' if current and current['active'] else ''}> Опубликовать</label><button class=btn>Сохранить</button></form></div>'''
+   form=f'''<div class="card box"><span class=eyebrow>{'Редактирование' if current else 'Новый тариф'}</span><h2>{html.escape(current['name']) if current else 'Создание тарифа'}</h2><form method=post action=/admin/tariffs/save><input type=hidden name=tariff_id value={current['id'] if current else ''}><label>Название для клиента</label><input name=name value="{html.escape(current['name'],quote=True) if current else ''}" placeholder="Например: 1 месяц" required><label>Короткий служебный код</label><input name=code pattern="[a-zA-Z0-9_-]+" value="{html.escape(current['code'],quote=True) if current else ''}" placeholder=m1 required><small>Латиница, цифры, <code>_</code> и <code>-</code>. После продажи лучше не менять.</small><div class=user-detail-grid><div><label>Цена, {html.escape(CURRENCY)}</label><input type=number name=price min=0 value={current['price'] if current else 100} required></div><div><label>Срок, дней</label><input type=number name=days min=1 value={current['days'] if current else 30} required></div><div><label>Количество устройств</label><input type=number name=devices min=1 max=100 value={current['devices'] if current else 1} required></div><div><label>Трафик, ГБ</label><input type=number name=traffic_gb min=0 value={current['traffic_gb'] if current else 0}><small>0 — без лимита</small></div></div><details><summary>Дополнительные параметры</summary><label>Начало действия</label><input type=datetime-local name=effective_at value="{effective}" required><label>Кому доступен</label><select name=personal_user_id>{user_options}</select><label class=consent><input type=checkbox name=renewal value=1 {'checked' if not current or current['renewal'] else ''}> Можно использовать для продления</label><label class=consent><input type=checkbox name=trial value=1 {'checked' if current and current['trial'] else ''}> Это пробный тариф</label></details><label class=consent><input type=checkbox name=active value=1 {'checked' if not current or current['active'] else ''}> Сразу показать на сайте и в Telegram-боте</label><button class=btn>{'Сохранить изменения' if current else 'Создать тариф'}</button><a class="btn soft backbtn" href=/admin/tariffs>Отмена</a></form></div>''' if current or show_new else ''
    preview_html=''
    if preview:preview_html=f'''<div class="card pricing-card"><span class=eyebrow>Предварительный просмотр</span><h2>{html.escape(preview['name'])}</h2><div class=price>{preview['price']} {html.escape(CURRENCY)}</div><ul><li>{preview['days']} дней</li><li>{preview['devices']} устройств</li><li>{'Без лимита трафика' if not preview['traffic_gb'] else str(preview['traffic_gb'])+' ГБ трафика'}</li></ul><button class=btn disabled>Перейти к оплате</button></div>'''
    promo_rows=''.join(f'<tr><td>{html.escape(x["code"])}</td><td>{str(x["discount_percent"])+"%" if x["discount_percent"] else str(x["discount_amount"])+" "+CURRENCY}</td><td>{x["used_count"]}{" / "+str(x["max_uses"]) if x["max_uses"] else ""}</td><td>{"Активен" if x["active"] else "Выключен"}<form method=post action=/admin/promos/toggle><input type=hidden name=promo_id value={x['id']}><input type=hidden name=active value={0 if x['active'] else 1}><button class=navbtn>{'Выключить' if x['active'] else 'Включить'}</button></form></td></tr>' for x in promos) or '<tr><td colspan=4>Промокодов нет</td></tr>'
    promo_form=f'''<div class=card><h2>Скидки и промокоды</h2><form method=post action=/admin/promos/save><label>Промокод</label><input name=code maxlength=32 required><div class=user-detail-grid><div><label>Скидка, %</label><input type=number name=discount_percent min=0 max=100 value=0></div><div><label>Или фиксированная скидка</label><input type=number name=discount_amount min=0 value=0></div><div><label>Максимум использований, 0 — без лимита</label><input type=number name=max_uses min=0 value=0></div></div><button class=btn>Создать промокод</button></form><div class=tablewrap><table><tr><th>Код</th><th>Скидка</th><th>Использовано</th><th>Статус</th></tr>{promo_rows}</table></div></div>'''
-   return self.sendx(200,page('Управление тарифами',f'''<section class=hero><h1>Управление тарифами</h1><p>Новые цены применяются только к новым заказам. В уже созданном заказе название, срок, устройства, трафик и сумма сохраняются отдельно.</p></section>{preview_html}<div class=tariff-admin-grid>{tariff_cards}</div><br><div class=user-detail-grid>{form}{promo_form}</div>''',True))
+   promo_section=promo_form if show_promos else ''
+   toolbar=f'''<div class=admin-actions><a class=btn href=/admin/tariffs?new=1>＋ Новый тариф</a><a class="btn soft" href="/admin/tariffs?section=promos">🏷 Промокоды</a><a class="btn soft" href="/admin/tariffs?view={'active' if show_archived else 'archived'}">{'← Активные' if show_archived else '🗃 Архив'}</a></div>'''
+   summary=f'''<div class=adminstats><div class=adminstat><b>{active_count}</b><span>опубликовано</span></div><div class=adminstat><b>{draft_count}</b><span>черновиков</span></div><div class=adminstat><b>{archive_count}</b><span>в архиве</span></div></div>'''
+   return self.sendx(200,page('Тарифы',f'''<section class=hero><span class=eyebrow>Настройки · Продажи</span><h1>Тарифы</h1><p>Изменения сразу появляются на сайте и в Telegram-боте. Старые заказы не изменяются.</p>{toolbar}<a class="btn soft" href=/admin/settings>← Все настройки</a></section>{summary}{preview_html}{form}{promo_section}<h2>{'Архив' if show_archived else 'Действующие тарифы'}</h2><div class=tariff-admin-grid>{tariff_cards}</div>''',True))
   if p=='/admin/user':
    if not self.isadmin():return self.sendx(403,'forbidden')
    try:user_id=int(parse_qs(urlparse(self.path).query).get('id',[0])[0])
@@ -1451,7 +1568,17 @@ class H(BaseHTTPRequestHandler):
    with db() as c:
     users=[dict(x) for x in c.execute('SELECT id,username,role,created_at,telegram_id,tg_username,twofa_enabled,blocked_at FROM users ORDER BY id DESC')];orders=c.execute('SELECT * FROM orders ORDER BY id DESC LIMIT 100').fetchall();ownership=[dict(x) for x in c.execute('SELECT user_id,telegram_id,xui_email,target_email FROM orders')];profiles=[dict(x) for x in c.execute('SELECT telegram_id,login FROM bot_profiles')]
     total_orders=c.execute('SELECT count(*) FROM orders').fetchone()[0];review_total=c.execute("SELECT count(*) FROM orders WHERE status='review'").fetchone()[0];pending_total=c.execute("SELECT count(*) FROM orders WHERE status IN ('pending','processing','payment_pending','payment_error','error')").fetchone()[0];revenue=c.execute("SELECT COALESCE(sum(amount),0) FROM orders WHERE status='active'").fetchone()[0];open_tickets=c.execute("SELECT count(*) FROM support_tickets WHERE status!='closed'").fetchone()[0];active_notices=c.execute("SELECT count(*) FROM maintenance_notices WHERE status='active'").fetchone()[0]
-   clients=panel_clients();by_id={u['id']:u for u in users};by_tg={int(u['telegram_id']):u for u in users if u.get('telegram_id') is not None};by_name={u['username'].lower():u for u in users};email_owner={}
+   clients=panel_clients();params=parse_qs(urlparse(self.path).query);admin_view=params.get('view',[''])[0]
+   if not admin_view:
+    expiring=sum(1 for x in clients if 0<int(x.get('expiryTime') or 0)-int(time.time()*1000)<=3*86400000);stats=status_data()
+    attention=review_total+open_tickets+expiring
+    priority=f'''<div class=admin-priority-grid><article class="card admin-priority"><span class=eyebrow>Оплаты</span><h2>{review_total} требуют проверки</h2><p>Заказов в обработке: {pending_total}</p><a class=btn href=/admin/orders/pending>Открыть оплаты</a></article><article class="card admin-priority"><span class=eyebrow>Поддержка</span><h2>{open_tickets} открытых тикетов</h2><p>Сообщения пользователей и гостевые обращения.</p><a class=btn href=/admin/tickets>Открыть тикеты</a></article><article class="card admin-priority"><span class=eyebrow>Подписки</span><h2>{expiring} скоро закончатся</h2><p>Всего активных записей: {len(clients)}</p><a class=btn href="/admin?view=users">Открыть пользователей</a></article></div>'''
+    summary=f'''<div class=adminstats><div class=adminstat><b>{len(users)}</b><span>пользователей</span></div><div class=adminstat><b>{len(clients)}</b><span>подписок</span></div><div class=adminstat><b>{attention}</b><span>требуют внимания</span></div><div class=adminstat><b>{revenue} ₽</b><span>подтверждено</span></div></div>'''
+    system=f'''<div class=callout><b>Система:</b> панель {badge(stats['panel'])} · Xray {badge(stats['xray'])} · объявлений {active_notices}</div>'''
+    body=f'''<section class="hero admin-home-hero"><span class=eyebrow>Управление сервисом</span><h1>Добрый день</h1><p>{'Есть задачи, требующие внимания.' if attention else 'Всё спокойно — срочных задач нет.'}</p></section>{summary}{system}{system_health_notice()}<h2>Сейчас важно</h2>{priority}'''
+    return self.sendx(200,page('Админ-панель',body,True))
+   if admin_view not in ('users','orders'):return self.redir('/admin')
+   by_id={u['id']:u for u in users};by_tg={int(u['telegram_id']):u for u in users if u.get('telegram_id') is not None};by_name={u['username'].lower():u for u in users};email_owner={}
    for row in ownership:
     owner=by_id.get(row.get('user_id')) or by_tg.get(int(row.get('telegram_id') or 0))
     if owner:
@@ -1478,7 +1605,7 @@ class H(BaseHTTPRequestHandler):
      toggle=f"<form method=post action=/admin/clients/toggle><input type=hidden name=email value='{html.escape(email,quote=True)}'><input type=hidden name=enable value='{0 if x.get('enable') else 1}'><button class='{'delbtn' if x.get('enable') else 'approvebtn'}'>{'Отключить' if x.get('enable') else 'Включить'}</button></form>"
      delete=f"<form method=post action=/admin/clients/delete onsubmit=\"return confirm('Удалить подписку {html.escape(email)}? Доступ будет отключён, история покупок сохранится.')\"><input type=hidden name=email value='{html.escape(email,quote=True)}'><button class=delbtn>Удалить</button></form>"
      subscriptions.append(f"<tr><td><b>{html.escape(email)}</b><br><small>до {date_text(x.get('expiryTime'))}</small></td><td>{used_devices(email)} из {limit}{planned}</td><td>{badge('online' if x.get('enable') else 'offline')}</td><td>{edit}</td><td><div class=admin-actions>{toggle}{delete}</div></td></tr>")
-    rows=''.join(subscriptions) or '<tr><td colspan=5>Подписок пока нет</td></tr>';tg=u.get('telegram_id') or 'не привязан';role={'admin':'Администратор','test':'Тестовый пользователь','user':'Пользователь','telegram':'Только Telegram','unlinked':'Владелец не найден'}.get(u.get('role'),u.get('role'))
+    rows=''.join(subscriptions) or '<tr><td colspan=5>Подписок пока нет</td></tr>';tg=u.get('telegram_id') or 'не привязан';role={'admin':'Администратор','user':'Пользователь','telegram':'Только Telegram','unlinked':'Владелец не найден'}.get(u.get('role'),u.get('role'))
     if not u.get('id') or u.get('role')=='admin':user_actions='—'
     else:
      detach=f'''<form method=post action=/admin/users/detach-telegram onsubmit="return confirm('Отвязать Telegram от пользователя {html.escape(u['username'])}?')"><input type=hidden name=user_id value={u['id']}><button class=navbtn>Отвязать Telegram</button></form>''' if u.get('telegram_id') else ''
@@ -1487,7 +1614,7 @@ class H(BaseHTTPRequestHandler):
      remove=f'''<form method=post action=/admin/users/delete onsubmit="return confirm('Удалить пользователя {html.escape(u['username'])}, все его подписки, заказы и Telegram-привязку? Это действие нельзя отменить.')"><input type=hidden name=user_id value={u['id']}><button class=delbtn>Удалить пользователя</button></form>'''
      user_actions=f'<div class=admin-actions><a class=approvebtn href=/admin/user?id={u["id"]}>Открыть карточку</a>{detach}{disable_2fa}{reset}{remove}</div>'
     monitor.append(f"<div class=usergroup><div class=userhead><div><h3>{html.escape(u['username'])}</h3><p>{role} · Telegram ID: {tg} · {'заблокирован' if u.get('blocked_at') else 'активен'} · 2FA: {'включена' if u.get('twofa_enabled') else 'выключена'} · Подписок: {len(subscriptions)} · Заказов: {order_counts.get(u.get('id'),0)}</p></div>{user_actions}</div><div class=userbody><div class=tablewrap><table><tr><th>Подписка</th><th>Устройства</th><th>Статус</th><th>Изменить</th><th>Управление</th></tr>{rows}</table></div></div></div>")
-   params=parse_qs(urlparse(self.path).query);notice='<div class=notice>Подписка удалена из 3x-ui. История заказов сохранена.</div>' if params.get('subscription_deleted') else ('<div class=notice>Пользователь, его подписки и связанные данные удалены.</div>' if params.get('user_deleted') else (f"<div class=notice>Количество устройств для подписки <b>{html.escape(params.get('client',[''])[0])}</b> обновлено.</div>" if params.get('devices_updated') else ''))
+   notice='<div class=notice>Подписка удалена из 3x-ui. История заказов сохранена.</div>' if params.get('subscription_deleted') else ('<div class=notice>Пользователь, его подписки и связанные данные удалены.</div>' if params.get('user_deleted') else (f"<div class=notice>Количество устройств для подписки <b>{html.escape(params.get('client',[''])[0])}</b> обновлено.</div>" if params.get('devices_updated') else ''))
    stats=status_data();monitor_html=''.join(monitor)
    operation_rows=[]
    for o in orders:
@@ -1503,7 +1630,9 @@ class H(BaseHTTPRequestHandler):
    review_banner=f"<div class=notice><b>Ожидают проверки: {review_total}</b><p>Для каждого платежа используйте кнопки «Деньги пришли» или «Оплата не поступила» в таблице заказов ниже.</p></div>" if review_total else ''
    stats_html=f"<div class=adminstats><div class=adminstat><b>{len(users)}</b><span>пользователей</span></div><div class=adminstat><b>{len(clients)}</b><span>подписок</span></div><div class=adminstat><b>{review_total}</b><span>проверок оплаты</span></div><div class=adminstat><b>{open_tickets}</b><span>открытых тикетов</span></div><div class=adminstat><b>{expiring}</b><span>истекают за 3 дня</span></div><div class=adminstat><b>{revenue} ₽</b><span>подтверждено</span></div></div>"
    system_notice=f"<div class=callout><b>Система:</b> панель {badge(stats['panel'])} · Xray {badge(stats['xray'])} · ожидают обработки {pending_total} · активных объявлений {active_notices} · всего заказов {total_orders}</div>"
-   return self.sendx(200,page('Админ-панель',f"<section class=hero><h1>Панель администратора</h1><p>Полный мониторинг {brand} и управление данными сервиса.</p></section>{stats_html}{system_notice}{system_health_notice()}{notice}{review_banner}<div class='card admin-section' id=users><h2>Пользователи и подписки</h2><p id=subscriptions>Все подписки пользователя собраны в одном блоке. Можно изменить лимит устройств, добавить дни, временно отключить или полностью удалить подписку.</p>{monitor_html}</div><br><div class='card admin-section' id=orders><h2>Заказы, операции и проверка оплаты</h2><p>Показаны последние 100 операций. Полный счётчик заказов: {total_orders}.</p><div class=tablewrap><table class=operations-table><tr><th>Заказ</th><th>Пользователь / подписка</th><th>Тариф / оплата</th><th>Проверка</th></tr>{orr}</table></div></div>",True))
+   users_section=f"<section class='hero admin-home-hero'><h1>Пользователи</h1><p>Аккаунты и подписки.</p></section>{notice}<div class='card admin-section' id=users><h2>Пользователи и подписки</h2>{monitor_html}</div>"
+   orders_section=f"<section class='hero admin-home-hero'><h1>Операции</h1><p>Последние 100 заказов и проверка оплат.</p></section>{review_banner}<div class='card admin-section' id=orders><h2>Заказы и операции</h2><p>Всего заказов: {total_orders}.</p><div class=tablewrap><table class=operations-table><tr><th>Заказ</th><th>Пользователь / подписка</th><th>Тариф / оплата</th><th>Проверка</th></tr>{orr}</table></div></div>"
+   return self.sendx(200,page('Пользователи' if admin_view=='users' else 'Операции',users_section if admin_view=='users' else orders_section,True))
   if p.startswith('/pay/') and p.endswith('/yookassa/return'):
    t=p.split('/')[2];o=getorder(t)
    if not o:return self.sendx(404,'not found')
@@ -1597,6 +1726,17 @@ class H(BaseHTTPRequestHandler):
      c.execute('INSERT INTO expiry_reminder_days(email,expiry_time,days_left,telegram_id,sent_at) VALUES(?,?,?,?,?)',(email,expiry,days_left,tg,int(time.time())))
      items.append({'telegram_id':tg,'email':email,'expiryTime':expiry,'days_left':days_left})
    return self.jout(200,{'reminders':items})
+  if p=='/api/bot/emergency-reminders':
+   if self.headers.get('X-API-Key')!=API_SECRET:return self.jout(403,{'error':'forbidden'})
+   now=int(time.time());items=[]
+   with db() as c:
+    muted={int(x[0]) for x in c.execute('SELECT telegram_id FROM notification_preferences WHERE muted=1')}
+    rows=c.execute('SELECT telegram_id,expires_at FROM emergency_mtproto WHERE subscriber=0 AND telegram_id>0 AND expires_at>? AND expires_at<=?',(now-86400,now+600)).fetchall()
+    for row in rows:
+     tg=int(row['telegram_id']);expiry=int(row['expires_at']);stage='expired' if expiry<=now else 'ten_minutes'
+     if tg in muted or c.execute('SELECT 1 FROM emergency_proxy_reminders WHERE telegram_id=? AND expires_at=? AND stage=?',(tg,expiry,stage)).fetchone():continue
+     items.append({'telegram_id':tg,'expires_at':expiry,'stage':stage,'seconds_left':max(0,expiry-now)})
+   return self.jout(200,{'reminders':items})
   if p=='/api/bot/maintenance-pending':
    if self.headers.get('X-API-Key')!=API_SECRET:return self.jout(403,{'error':'forbidden'})
    subscribers=active_telegram_subscribers();items=[]
@@ -1622,7 +1762,7 @@ class H(BaseHTTPRequestHandler):
  def do_HEAD(self):return self.do_GET()
  def do_POST(self):
   p=urlparse(self.path).path
-  if self.limited('auth' if p in ('/login','/register','/2fa-login') or p==ADMIN_ENTRY or p==TEST_ENTRY else 'general'):return
+  if self.limited('auth' if p in ('/login','/register','/2fa-login','/switch/user') or p==ADMIN_ENTRY else 'general'):return
   if int(self.headers.get('Content-Length','0') or 0)>1024*1024:return self.sendx(413,'Запрос слишком большой.','text/plain; charset=utf-8')
   d=self.data()
   if p=='/api/payments/yookassa/webhook':
@@ -1647,30 +1787,34 @@ class H(BaseHTTPRequestHandler):
     with db() as c:c.execute("INSERT INTO auth_sessions(nonce,username,status,expires_at,attempts) VALUES(?,?,'2fa_pending',?,0)",(nonce,u['username'],int(time.time()+300)))
     return self.redir('/2fa-login',f"vpn_2fa={nonce}; Path=/; Max-Age=300; Secure; HttpOnly; SameSite=Strict")
    security_event('login_success',u['username'],self.request_ip(),{'entry':'admin'})
-   return self.redir('/mode',f"vpn_session={self.token(u['username'])}; Path=/; Max-Age=86400; Secure; HttpOnly; SameSite=Lax")
-  if p==TEST_ENTRY:
-   with db() as c:u=c.execute("SELECT * FROM users WHERE username=? AND role='test'",(d.get('username',''),)).fetchone()
-   if not password_ok(u,d.get('password','')):
-    security_event('login_failed',d.get('username',''),self.request_ip(),{'entry':'test'})
-    return self.sendx(401,page('Вход тестового пользователя',f'<div class="card box"><h2 class=err>Неправильный логин или пароль</h2><a class="btn soft" href="{html.escape(TEST_ENTRY,quote=True)}">Повторить</a></div>'))
-   if u['twofa_enabled']:
-    nonce=secrets.token_urlsafe(24)
-    with db() as c:c.execute("INSERT INTO auth_sessions(nonce,username,status,expires_at,attempts) VALUES(?,?,'2fa_pending',?,0)",(nonce,u['username'],int(time.time()+300)))
-    return self.redir('/2fa-login',f"vpn_2fa={nonce}; Path=/; Max-Age=300; Secure; HttpOnly; SameSite=Strict")
-   security_event('login_success',u['username'],self.request_ip(),{'entry':'test'})
-   return self.redir('/',f"vpn_session={self.token(u['username'])}; Path=/; Max-Age=86400; Secure; HttpOnly; SameSite=Lax")
+   token=self.token(u['username']);return self.redir('/mode',[f"vpn_session={token}; Path=/; Max-Age=28800; Secure; HttpOnly; SameSite=Strict",f"vpn_admin_session={token}; Path=/; Max-Age=28800; Secure; HttpOnly; SameSite=Strict"])
+  if p=='/switch/user':
+   authorized=self.standby_admin() or (self.who() if self.isadmin() else None)
+   if not authorized:return self.sendx(403,'forbidden')
+   with db() as c:
+    admin=c.execute("SELECT * FROM users WHERE username=? AND role='admin'",(d.get('username',''),)).fetchone()
+    if not admin or admin['username']!=authorized or not password_ok(admin,d.get('password','')):
+     security_event('login_failed',d.get('username',''),self.request_ip(),{'entry':'admin_user_mode'})
+     return self.sendx(401,page('Вход в пользовательский режим','<div class="card box"><h2 class=err>Неправильный логин или пароль администратора</h2><a class="btn soft" href=/switch/user>Повторить</a></div>'))
+    profile=admin_user_profile(c,admin)
+   security_event('login_success',admin['username'],self.request_ip(),{'entry':'admin_user_mode','profile':profile['username']})
+   return self.redir('/',f"vpn_session={self.token(profile['username'])}; Path=/; Max-Age=28800; Secure; HttpOnly; SameSite=Strict")
+  if p=='/emergency-telegram':
+   device=self.cookie('emergency_device')
+   if not emergency_device_valid(device):device=emergency_device_value()
+   try:emergency_web_access(device,self.request_ip())
+   except Exception as error:return self.sendx(429 if isinstance(error,PermissionError) else 503,page('Аварийный Telegram',f'<div class="card box"><h2 class=err>Не удалось выдать доступ</h2><p>{html.escape(str(error))}</p><a class="btn soft" href=/emergency-telegram>Вернуться</a></div>'))
+   return self.redir('/emergency-telegram',f'emergency_device={device}; Path=/; Max-Age={MTPROTO_COOLDOWN_SECONDS}; Secure; HttpOnly; SameSite=Lax')
   if p=='/login':
    recovered=False
    with db() as c:
     u=c.execute('SELECT * FROM users WHERE username=? OR lower(email)=lower(?)',(d.get('username',''),d.get('username',''))).fetchone()
+    restricted=bool(u and (u['role']=='admin' or (u['telegram_id'] and int(u['telegram_id'])==admin_telegram_id())))
     valid=password_ok(u,d.get('password',''))
-    if not valid and u and u['role'] not in ('admin','test'):recovered=consume_recovery_code(c,u['id'],d.get('password',''));valid=recovered
-   if not valid:
-    security_event('login_failed',d.get('username',''),self.request_ip(),{'entry':'public'})
+    if not valid and u and not restricted:recovered=consume_recovery_code(c,u['id'],d.get('password',''));valid=recovered
+   if not valid or restricted:
+    security_event('login_failed',d.get('username',''),self.request_ip(),{'entry':'public','reason':'restricted_admin_identity' if restricted else 'invalid_credentials'})
     return self.sendx(401,page('Вход','<div class="card box"><h2 class=err>Неправильный логин, пароль или резервный код</h2><a class="btn soft" href=/login>Повторить</a></div>'))
-   if u['role'] in ('admin','test'):
-    security_event('login_failed',u['username'],self.request_ip(),{'entry':'public','reason':'restricted_role'})
-    return self.sendx(401,page('Вход','<div class="card box"><h2 class=err>Неправильный логин или пароль</h2><a class="btn soft" href=/login>Повторить</a></div>'))
    if u['email'] and not u['email_verified_at']:
     return self.sendx(403,page('Подтвердите почту','<div class="card box"><h2>Почта ещё не подтверждена</h2><p>Откройте письмо от '+html.escape(MAIL_FROM)+' и перейдите по ссылке подтверждения.</p><a class="btn soft" href=/login>Вернуться</a></div>'))
    if u['twofa_enabled'] and not recovered:
@@ -1679,7 +1823,8 @@ class H(BaseHTTPRequestHandler):
     return self.redir('/2fa-login',f"vpn_2fa={nonce}; Path=/; Max-Age=300; Secure; HttpOnly; SameSite=Strict")
    security_event('login_success',u['username'],self.request_ip(),{'entry':'public','recovery_code':bool(recovered)})
    threading.Thread(target=send_login_notice,args=(dict(u),self.request_ip()),daemon=True).start()
-   return self.redir('/mode' if u['role']=='admin' else '/',f"vpn_session={self.token(u['username'])}; Path=/; Max-Age=86400; Secure; HttpOnly; SameSite=Lax")
+   token=self.token(u['username'])
+   return self.redir('/mode' if u['role']=='admin' else '/',([f"vpn_session={token}; Path=/; Max-Age=28800; Secure; HttpOnly; SameSite=Strict",f"vpn_admin_session={token}; Path=/; Max-Age=28800; Secure; HttpOnly; SameSite=Strict"] if u['role']=='admin' else f"vpn_session={token}; Path=/; Max-Age=86400; Secure; HttpOnly; SameSite=Lax"))
   if p=='/2fa-login':
    nonce=self.cookie('vpn_2fa');code=d.get('code','')
    with db() as c:
@@ -1692,7 +1837,8 @@ class H(BaseHTTPRequestHandler):
     c.execute("UPDATE auth_sessions SET status='used',used_at=? WHERE nonce=?",(int(time.time()),nonce))
    security_event('login_success',u['username'],self.request_ip(),{'entry':'2fa'})
    threading.Thread(target=send_login_notice,args=(dict(u),self.request_ip()),daemon=True).start()
-   return self.redir('/mode' if u['role']=='admin' else '/',f"vpn_session={self.token(u['username'])}; Path=/; Max-Age=86400; Secure; HttpOnly; SameSite=Lax")
+   token=self.token(u['username'])
+   return self.redir('/mode' if u['role']=='admin' else '/',([f"vpn_session={token}; Path=/; Max-Age=28800; Secure; HttpOnly; SameSite=Strict",f"vpn_admin_session={token}; Path=/; Max-Age=28800; Secure; HttpOnly; SameSite=Strict"] if u['role']=='admin' else f"vpn_session={token}; Path=/; Max-Age=86400; Secure; HttpOnly; SameSite=Lax"))
   if p=='/forgot-password':
    email=str(d.get('email','')).strip().lower()
    with db() as c:
@@ -1733,11 +1879,13 @@ class H(BaseHTTPRequestHandler):
       old=u['username'];c.execute('UPDATE users SET username=? WHERE id=?',(new,u['id']));c.execute('UPDATE auth_sessions SET username=? WHERE username=?',(new,old));c.execute('UPDATE orders SET customer=? WHERE user_id=? AND customer=?',(new,u['id'],old))
       if u['telegram_id']:c.execute('UPDATE bot_profiles SET login=? WHERE telegram_id=?',(new,u['telegram_id']))
     except sqlite3.IntegrityError:return self.sendx(409,page('Ошибка','<div class="card box"><h2 class=err>Этот логин уже занят</h2><a class=btn href=/settings/security>Повторить</a></div>',admin))
-    return self.redir('/settings/security?login_changed=1',f"vpn_session={self.token(new)}; Path=/; Max-Age=86400; Secure; HttpOnly; SameSite=Lax")
+    token=self.token(new);cookies=[f"vpn_session={token}; Path=/; Max-Age=28800; Secure; HttpOnly; SameSite=Strict",f"vpn_admin_session={token}; Path=/; Max-Age=28800; Secure; HttpOnly; SameSite=Strict"] if admin else f"vpn_session={token}; Path=/; Max-Age=86400; Secure; HttpOnly; SameSite=Lax"
+    return self.redir('/settings/security?login_changed=1',cookies)
    new=d.get('new_password','');confirm=d.get('confirm_password','');special=any(not ch.isalnum() for ch in new);valid=len(new)>=8 and any(ch.islower() for ch in new) and any(ch.isupper() for ch in new) and any(ch.isdigit() for ch in new) and special
    if not valid or new!=confirm:return self.sendx(400,page('Ошибка','<div class="card box"><h2 class=err>Пароли не совпадают или не отвечают требованиям</h2><a class=btn href=/settings/security>Повторить</a></div>',admin))
    with db() as c:set_user_password(c,u['username'],new);c.execute('UPDATE users SET session_epoch=session_epoch+1 WHERE id=?',(u['id'],));c.execute('DELETE FROM auth_sessions WHERE username=?',(u['username'],))
-   return self.redir('/settings/security?password_changed=1',f"vpn_session={self.token(u['username'])}; Path=/; Max-Age=86400; Secure; HttpOnly; SameSite=Lax")
+   token=self.token(u['username']);cookies=[f"vpn_session={token}; Path=/; Max-Age=28800; Secure; HttpOnly; SameSite=Strict",f"vpn_admin_session={token}; Path=/; Max-Age=28800; Secure; HttpOnly; SameSite=Strict"] if admin else f"vpn_session={token}; Path=/; Max-Age=86400; Secure; HttpOnly; SameSite=Lax"
+   return self.redir('/settings/security?password_changed=1',cookies)
   if p=='/register':
    enabled=mail_enabled();name=d.get('username','').strip().lower();email=str(d.get('email','')).strip().lower();pw=d.get('password','');confirm=d.get('password_confirm','')
    if d.get('terms')!='1':return self.sendx(400,page('Ошибка','<div class="card box"><h2 class=err>Для регистрации необходимо принять условия использования</h2><a class="btn soft" href=/register>Вернуться</a></div>'))
@@ -1782,27 +1930,6 @@ class H(BaseHTTPRequestHandler):
     if ticket['status']=='closed':return self.sendx(409,'chat closed')
     now=int(time.time());c.execute("INSERT INTO support_messages(ticket_id,sender,message,created_at) VALUES(?,'user',?,?)",(ticket['id'],message,now));c.execute("UPDATE support_tickets SET status='open',updated_at=? WHERE id=?",(now,ticket['id']));c.execute("INSERT INTO bot_events(event_type,ticket_id,telegram_id,created_at) VALUES('ticket_user_reply',?,0,?)",(ticket['id'],now))
    return self.redir('/guest-support?token='+quote(token))
-  if p=='/admin/test-user':
-   if not self.isadmin():return self.sendx(403,'forbidden')
-   action=str(d.get('action','update'));name=str(d.get('username','')).strip().lower();password=str(d.get('password',''));confirm=str(d.get('password_confirm',''));valid_name=8<=len(name)<=32 and name[0].isalnum() and name[-1].isalnum() and any(ch in 'abcdefghijklmnopqrstuvwxyz' for ch in name) and all(ch in 'abcdefghijklmnopqrstuvwxyz0123456789-' for ch in name)
-   if not valid_name:return self.sendx(400,page('Ошибка','<div class="card box"><h2 class=err>Неверный логин тестового пользователя</h2><a class=btn href=/admin/test-user>Повторить</a></div>',True))
-   if password or action=='create':
-    valid_password=len(password)>=8 and any(ch.islower() for ch in password) and any(ch.isupper() for ch in password) and any(ch.isdigit() for ch in password) and any(not ch.isalnum() for ch in password)
-    if not valid_password or password!=confirm:return self.sendx(400,page('Ошибка','<div class="card box"><h2 class=err>Пароли не совпадают или не отвечают требованиям</h2><a class=btn href=/admin/test-user>Повторить</a></div>',True))
-   try:
-    with db() as c:
-     if c.execute('SELECT 1 FROM users WHERE lower(username)=lower(?)',(name,)).fetchone() and action=='create':raise sqlite3.IntegrityError()
-     if action=='create':
-      add_user(c,name,password,'test');created_uid=c.execute('SELECT id FROM users WHERE username=?',(name,)).fetchone()['id'];c.execute('INSERT INTO admin_actions(admin_username,user_id,action,details,created_at) VALUES(?,?,?,?,?)',(self.who(),created_uid,'test_user_created',json.dumps({'username':name},ensure_ascii=False),int(time.time())));return self.redir('/admin/test-user?saved=1')
-     try:uid=int(d.get('user_id',0))
-     except:return self.sendx(400,'bad user id')
-     test=c.execute("SELECT * FROM users WHERE id=? AND role='test'",(uid,)).fetchone()
-     if not test:return self.sendx(404,'test user not found')
-     if c.execute('SELECT 1 FROM users WHERE lower(username)=lower(?) AND id<>?',(name,uid)).fetchone():raise sqlite3.IntegrityError()
-     old=test['username'];c.execute('UPDATE users SET username=?,session_epoch=session_epoch+1 WHERE id=?',(name,uid));c.execute('UPDATE auth_sessions SET username=? WHERE username=?',(name,old));c.execute('UPDATE orders SET customer=? WHERE user_id=? AND customer=?',(name,uid,old))
-     if password:set_user_password(c,name,password)
-   except sqlite3.IntegrityError:return self.sendx(409,page('Ошибка','<div class="card box"><h2 class=err>Этот логин уже занят</h2><a class=btn href=/admin/test-user>Повторить</a></div>',True))
-   return self.redir('/admin/test-user?saved=1')
   if p=='/support/create':
    if not self.need():return
    message=str(d.get('message','')).strip()
@@ -1869,26 +1996,13 @@ class H(BaseHTTPRequestHandler):
      for message_id in message_ids:c.execute('DELETE FROM site_notification_reads WHERE notification_key=?',(f'support:{message_id}',))
      c.execute(f'DELETE FROM bot_events WHERE ticket_id IN ({marks})',ticket_ids);c.execute(f'DELETE FROM support_messages WHERE ticket_id IN ({marks})',ticket_ids);c.execute(f'DELETE FROM support_tickets WHERE id IN ({marks})',ticket_ids)
    return self.redir('/admin/tickets')
-  if p=='/admin/backups/create':
-   if not self.isadmin():return self.sendx(403,'forbidden')
-   try:backup_control('queue-create')
-   except Exception as error:return self.sendx(503,page('Ошибка резервного копирования',f'<div class="card box"><h2 class=err>Не удалось запустить резервное копирование</h2><p>{html.escape(str(error))}</p><a class=btn href=/admin/backups>Вернуться</a></div>',True))
-   record_admin_action(self.who(),None,None,'backup_created_manually');return self.redir('/admin/backups')
-  if p=='/admin/backups/restore':
-   if not self.isadmin():return self.sendx(403,'forbidden')
-   archive=str(d.get('archive','')).strip();scope=str(d.get('scope','')).strip();confirmation=str(d.get('confirmation','')).strip()
-   if confirmation!=archive:return self.sendx(400,page('Подтверждение не совпало','<div class="card box"><h2 class=err>Имя архива введено неверно</h2><p>Восстановление не запускалось.</p><a class=btn href=/admin/backups>Вернуться</a></div>',True))
-   if scope not in ('site','xui','all','full'):return self.sendx(400,'bad restore scope')
-   try:backup_control('queue-restore',archive,scope)
-   except Exception as error:return self.sendx(503,page('Ошибка восстановления',f'<div class="card box"><h2 class=err>Не удалось запустить восстановление</h2><p>{html.escape(str(error))}</p><a class=btn href=/admin/backups>Вернуться</a></div>',True))
-   record_admin_action(self.who(),None,None,'backup_restore_started',{'archive':archive,'scope':scope});return self.redir('/admin/backups')
   if p=='/admin/mail/settings':
    if not self.isadmin():return self.sendx(403,'forbidden')
    try:
-    current=mail_settings();smtp_host=str(d.get('smtp_host','')).strip()[:255];imap_host=str(d.get('imap_host','')).strip()[:255];smtp_port=int(d.get('smtp_port',587));imap_port=int(d.get('imap_port',993));mail_from=str(d.get('mail_from','')).strip().lower();reply_to=str(d.get('reply_to','')).strip().lower()
-    if not smtp_host or any(ch.isspace() for ch in smtp_host) or (imap_host and any(ch.isspace() for ch in imap_host)) or not (1<=smtp_port<=65535 and 1<=imap_port<=65535) or not valid_email_address(mail_from) or not valid_email_address(reply_to):raise ValueError('Проверьте адреса серверов, порты и почтовые адреса')
+    current=mail_settings();smtp_host=str(d.get('smtp_host','')).strip()[:255];imap_host=str(d.get('imap_host','')).strip()[:255];smtp_port=int(d.get('smtp_port',587));imap_port=int(d.get('imap_port',993));mail_from=str(d.get('mail_from','')).strip().lower();reply_to=str(d.get('reply_to','')).strip().lower();smtp_security=str(d.get('smtp_security') or ('ssl' if d.get('smtp_ssl')=='1' else 'starttls'));imap_security=str(d.get('imap_security') or ('ssl' if d.get('imap_ssl')=='1' else 'starttls'))
+    if smtp_security not in ('starttls','ssl') or imap_security not in ('starttls','ssl') or not smtp_host or any(ch.isspace() for ch in smtp_host) or (imap_host and any(ch.isspace() for ch in imap_host)) or not (1<=smtp_port<=65535 and 1<=imap_port<=65535) or not valid_email_address(mail_from) or not valid_email_address(reply_to):raise ValueError('Проверьте адреса серверов, порты и почтовые адреса')
     smtp_password=str(d.get('smtp_password','')) or str(current.get('smtp_password') or '');imap_password=str(d.get('imap_password','')) or str(current.get('imap_password') or '')
-    values=(smtp_host,smtp_port,str(d.get('smtp_username','')).strip()[:254],encrypt_mail_secret(smtp_password),1 if d.get('smtp_starttls')=='1' else 0,1 if d.get('smtp_ssl')=='1' else 0,imap_host,imap_port,str(d.get('imap_username','')).strip()[:254],encrypt_mail_secret(imap_password),1 if d.get('imap_ssl')=='1' else 0,mail_from,reply_to,int(time.time()))
+    values=(smtp_host,smtp_port,str(d.get('smtp_username','')).strip()[:254],encrypt_mail_secret(smtp_password),1 if smtp_security=='starttls' else 0,1 if smtp_security=='ssl' else 0,imap_host,imap_port,str(d.get('imap_username','')).strip()[:254],encrypt_mail_secret(imap_password),1 if imap_security=='ssl' else 0,mail_from,reply_to,int(time.time()))
     with db() as c:c.execute('INSERT INTO mail_settings(id,smtp_host,smtp_port,smtp_username,smtp_password_enc,smtp_starttls,smtp_ssl,imap_host,imap_port,imap_username,imap_password_enc,imap_ssl,mail_from,reply_to,updated_at) VALUES(1,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET smtp_host=excluded.smtp_host,smtp_port=excluded.smtp_port,smtp_username=excluded.smtp_username,smtp_password_enc=excluded.smtp_password_enc,smtp_starttls=excluded.smtp_starttls,smtp_ssl=excluded.smtp_ssl,imap_host=excluded.imap_host,imap_port=excluded.imap_port,imap_username=excluded.imap_username,imap_password_enc=excluded.imap_password_enc,imap_ssl=excluded.imap_ssl,mail_from=excluded.mail_from,reply_to=excluded.reply_to,updated_at=excluded.updated_at',values)
     record_admin_action(self.who(),None,None,'mail_settings_updated',{'smtp_host':smtp_host,'smtp_port':smtp_port,'imap_host':imap_host,'imap_port':imap_port,'mail_from':mail_from})
    except Exception as error:return self.sendx(400,page('Ошибка почты',f'<div class="card box"><h2 class=err>Не удалось сохранить настройки</h2><p>{html.escape(str(error))}</p><a class=btn href=/admin/mail/settings>Вернуться</a></div>',True))
@@ -2068,6 +2182,18 @@ class H(BaseHTTPRequestHandler):
      for notice_id in notice_ids:c.execute('DELETE FROM site_notification_reads WHERE notification_key=?',(f'maintenance:{notice_id}',))
      c.execute(f'DELETE FROM maintenance_notices WHERE id IN ({marks})',notice_ids)
    return self.redir('/admin/maintenance')
+  if p=='/api/bot/admin-settings':
+   if self.headers.get('X-API-Key')!=API_SECRET:return self.jout(403,{'error':'forbidden'})
+   try:telegram_id=int(d.get('telegram_id') or 0)
+   except (TypeError,ValueError):telegram_id=0
+   if telegram_id<=0:return self.jout(400,{'error':'Некорректный Telegram Admin ID'})
+   with db() as c:
+    admin=c.execute("SELECT id FROM users WHERE role='admin' ORDER BY id LIMIT 1").fetchone()
+    if not admin:return self.jout(409,{'error':'Администратор сайта не найден'})
+    if c.execute('SELECT 1 FROM users WHERE telegram_id=? AND id<>?',(telegram_id,admin['id'])).fetchone():return self.jout(409,{'error':'Telegram ID уже связан с другим аккаунтом'})
+    c.execute('UPDATE users SET telegram_id=? WHERE id=?',(telegram_id,admin['id']))
+   record_admin_action('telegram-bot',admin['id'],None,'telegram_admin_synced',{'telegram_id':telegram_id})
+   return self.jout(200,{'ok':True})
   if p=='/api/bot/telegram-auth':
    if self.headers.get('X-API-Key')!=API_SECRET:return self.jout(403,{'error':'forbidden'})
    nonce=d.get('nonce','');tgid=int(d.get('telegram_id',0) or 0);tgname=str(d.get('tg_username','')).lstrip('@')[:32]
@@ -2077,7 +2203,7 @@ class H(BaseHTTPRequestHandler):
     if not a:return self.jout(400,{'error':'Ссылка устарела. Начните вход на сайте заново.'})
     u=c.execute('SELECT * FROM users WHERE telegram_id=?',(tgid,)).fetchone()
     if a['status']=='admin_pending' and (not u or u['role']!='admin'):return self.jout(403,{'error':'Эта ссылка предназначена только для администратора'})
-    if a['status']=='pending' and u and u['role'] in ('admin','test'):return self.jout(403,{'error':'Вход через общую форму запрещён'})
+    if a['status']=='pending' and tgid==admin_telegram_id():return self.jout(403,{'error':'Вход через общую форму запрещён'})
     if not u:
      username='tg_'+str(tgid);add_user(c,username,secrets.token_urlsafe(32),'user');c.execute('UPDATE users SET telegram_id=?,tg_username=? WHERE username=?',(tgid,tgname or None,username))
     else:username=u['username'];c.execute('UPDATE users SET tg_username=? WHERE id=?',(tgname or u['tg_username'],u['id']))
@@ -2091,6 +2217,7 @@ class H(BaseHTTPRequestHandler):
     if not a:return self.jout(400,{'error':'Ссылка устарела. Начните привязку на сайте заново.'})
     u=c.execute('SELECT * FROM users WHERE username=?',(a['username'],)).fetchone();owner=c.execute('SELECT username FROM users WHERE telegram_id=?',(tgid,)).fetchone()
     if not u:return self.jout(404,{'error':'Аккаунт сайта не найден'})
+    if tgid==admin_telegram_id():return self.jout(403,{'error':'Telegram администра нельзя привязать к пользовательской учётной записи'})
     if owner and owner['username']!=u['username']:return self.jout(409,{'error':'Этот Telegram уже связан с другим аккаунтом'})
     c.execute('UPDATE users SET telegram_id=?,tg_username=? WHERE id=?',(tgid,tgname or None,u['id']))
     c.execute('UPDATE orders SET telegram_id=?,tg_username=? WHERE user_id=? OR (? IS NOT NULL AND lower(email)=lower(?))',(tgid,'@'+tgname if tgname else None,u['id'],u['email'],u['email']))
@@ -2114,6 +2241,25 @@ class H(BaseHTTPRequestHandler):
    r=xapi('POST','/panel/api/clients/update/'+quote(match['email']),client_payload(client))
    if not r.get('success'):return self.jout(502,{'error':'Ошибка привязки подписки'})
    return self.jout(200,{'ok':True,'email':match['email'],'subscription_url':subscription_url(match['email'])})
+  if p=='/api/bot/emergency-mtproto':
+   if self.headers.get('X-API-Key')!=API_SECRET:return self.jout(403,{'error':'forbidden'})
+   try:result=emergency_mtproto_access(int(d.get('telegram_id',0) or 0))
+   except PermissionError as error:return self.jout(429,{'error':str(error)})
+   except ValueError as error:return self.jout(400,{'error':str(error)})
+   except Exception as error:return self.jout(503,{'error':str(error)[:300]})
+   return self.jout(200,{'ok':True,**result})
+  if p=='/api/bot/emergency-claim':
+   if self.headers.get('X-API-Key')!=API_SECRET:return self.jout(403,{'error':'forbidden'})
+   try:return self.jout(200,claim_emergency_web(str(d.get('token','')),int(d.get('telegram_id',0) or 0)))
+   except PermissionError as error:return self.jout(409,{'error':str(error)})
+   except Exception as error:return self.jout(400,{'error':str(error)[:300]})
+  if p=='/api/bot/emergency-reminder-delivered':
+   if self.headers.get('X-API-Key')!=API_SECRET:return self.jout(403,{'error':'forbidden'})
+   try:tg=int(d.get('telegram_id',0));expiry=int(d.get('expires_at',0));stage=str(d.get('stage',''))
+   except (TypeError,ValueError):return self.jout(400,{'error':'invalid reminder'})
+   if not tg or not expiry or stage not in ('ten_minutes','expired'):return self.jout(400,{'error':'invalid reminder'})
+   with db() as c:c.execute('INSERT OR IGNORE INTO emergency_proxy_reminders(telegram_id,expires_at,stage,delivered_at) VALUES(?,?,?,?)',(tg,expiry,stage,int(time.time())))
+   return self.jout(200,{'ok':True})
   if p=='/api/migration/subscription-alias':
    if self.headers.get('X-API-Key')!=API_SECRET:return self.jout(403,{'error':'forbidden'})
    email=str(d.get('email','')).strip();url=str(d.get('subscription_url','')).strip();source=str(d.get('source_node','')).strip()[:64];active=1 if d.get('active',True) else 0
@@ -2186,7 +2332,7 @@ class H(BaseHTTPRequestHandler):
    with db() as c:
     ticket=c.execute('SELECT * FROM support_tickets WHERE id=?',(ticket_id,)).fetchone()
     if not ticket:return self.jout(404,{'error':'Тикет не найден'})
-    admin=tgid==ADMIN_TG
+    admin=tgid==admin_telegram_id() and not bool(d.get('as_user'))
     if not admin and int(ticket['telegram_id'])!=tgid:return self.jout(403,{'error':'Это обращение принадлежит другому пользователю'})
     if ticket['status']=='closed':return self.jout(409,{'error':'Тикет уже закрыт'})
     now=int(time.time());sender='admin' if admin else 'user';status='answered' if admin else 'open'
@@ -2198,12 +2344,16 @@ class H(BaseHTTPRequestHandler):
    with db() as c:
     ticket=c.execute('SELECT * FROM support_tickets WHERE id=?',(ticket_id,)).fetchone()
     if not ticket:return self.jout(404,{'error':'Тикет не найден'})
-    if tgid!=ADMIN_TG and int(ticket['telegram_id'])!=tgid:return self.jout(403,{'error':'Это обращение принадлежит другому пользователю'})
+    admin=tgid==admin_telegram_id() and not bool(d.get('as_user'))
+    if not admin and int(ticket['telegram_id'])!=tgid:return self.jout(403,{'error':'Это обращение принадлежит другому пользователю'})
     now=int(time.time());c.execute("UPDATE support_tickets SET status='closed',updated_at=?,closed_at=? WHERE id=?",(now,now,ticket_id))
-   return self.jout(200,{'ok':True,'ticket_id':ticket_id,'telegram_id':ticket['telegram_id'],'closed_by':'admin' if tgid==ADMIN_TG else 'user'})
+   return self.jout(200,{'ok':True,'ticket_id':ticket_id,'telegram_id':ticket['telegram_id'],'closed_by':'admin' if admin else 'user'})
   if p=='/api/bot/profile':
    if self.headers.get('X-API-Key')!=API_SECRET:return self.jout(403,{'error':'forbidden'})
    tgid=int(d.get('telegram_id',0) or 0);login=str(d.get('login','')).strip().lower();tgname=str(d.get('tg_username','')).lstrip('@')[:32]
+   if tgid==admin_telegram_id():
+    with db() as c:profile=user_for_telegram(c,tgid,True)
+    return self.jout(200,{'ok':True,'login':profile['username'],'renamed':0,'site_account_created':False,'linked_admin_profile':True})
    valid=8<=len(login)<=32 and login[0].isalnum() and login[-1].isalnum() and any(ch in 'abcdefghijklmnopqrstuvwxyz' for ch in login) and all(ch in 'abcdefghijklmnopqrstuvwxyz0123456789-' for ch in login)
    if not tgid or not valid:return self.jout(400,{'error':'Логин: 8–32 символа, обязательны латинские буквы; цифры и дефис разрешены. Например: familiaio'})
    with db() as c:existing=c.execute('SELECT login FROM bot_profiles WHERE telegram_id=?',(tgid,)).fetchone()
@@ -2492,45 +2642,37 @@ class H(BaseHTTPRequestHandler):
   if p in ('/orders','/api/orders'):
    if p.startswith('/api/') and self.headers.get('X-API-Key')!=API_SECRET:return self.jout(403,{'error':'forbidden'})
    plan=d.get('plan','m1');t=secrets.token_urlsafe(18);tg=d.get('telegram_id')
-   test_username=str(d.get('test_username','')).strip();test_mode=False
    email=d.get('email','').strip().lower();tgname=d.get('tg_username','').strip()
    if tgname and not tgname.startswith('@'):tgname='@'+tgname
    valid_email=('@' in email and '.' in email.rsplit('@',1)[-1]) if email else False
    valid_tg=(tgname.startswith('@') and 6<=len(tgname)<=33 and all(ch.isalnum() or ch=='_' for ch in tgname[1:])) if tgname else False
    signed=self.who();uid=None
    if signed:
-    with db() as c:z=c.execute('SELECT id,telegram_id FROM users WHERE username=?',(signed,)).fetchone()
+    with db() as c:z=c.execute("SELECT id,telegram_id FROM users WHERE username=? AND role<>'admin'",(signed,)).fetchone()
     if z:
      uid=z['id']
      if not tg and z['telegram_id']:tg=z['telegram_id']
    elif tg:
     try:
-     with db() as c:z=c.execute('SELECT id FROM users WHERE telegram_id=?',(int(tg),)).fetchone()
+     with db() as c:z=user_for_telegram(c,int(tg),True)
      if z:uid=z['id']
     except (TypeError,ValueError):pass
-   if p.startswith('/api/') and test_username:
-    try:admin_test=int(tg)==ADMIN_TG
-    except (TypeError,ValueError):admin_test=False
-    if not admin_test:return self.jout(403,{'error':'Выбор тестового пользователя доступен только администратору'})
-    with db() as c:z=c.execute("SELECT id,username FROM users WHERE username=? AND role='test' AND blocked_at IS NULL",(test_username,)).fetchone()
-    if not z:return self.jout(404,{'error':'Тестовый пользователь не найден'})
-    uid=z['id'];test_username=z['username'];test_mode=True
    tariff=tariff_by_code(plan,uid)
    if not tariff:return self.jout(400,{'error':'Тариф недоступен'}) if p.startswith('/api/') else self.sendx(400,page('Тариф недоступен','<div class="card box"><h2 class=err>Этот тариф больше нельзя оформить</h2><a class=btn href=/#tariffs>Выбрать тариф</a></div>'))
    plan_values=(tariff['name'],int(tariff['days']),int(tariff['price']),int(tariff['devices']),int(tariff['traffic_gb']))
    if p=='/orders' and not uid:return self.redir('/login')
    if tariff['trial']:
-    if p.startswith('/api/') and not tg and not test_mode:return self.jout(400,{'error':'Пробный период доступен только для Telegram-аккаунта'})
-    with db() as c:claimed=c.execute('SELECT 1 FROM site_trial_claims WHERE user_id=?',(uid,)).fetchone() if test_mode or not p.startswith('/api/') else c.execute('SELECT 1 FROM trial_claims WHERE telegram_id=?',(int(tg),)).fetchone()
+    if p.startswith('/api/') and not tg:return self.jout(400,{'error':'Пробный период доступен только для Telegram-аккаунта'})
+    with db() as c:claimed=c.execute('SELECT 1 FROM site_trial_claims WHERE user_id=?',(uid,)).fetchone() if not p.startswith('/api/') else c.execute('SELECT 1 FROM trial_claims WHERE telegram_id=?',(int(tg),)).fetchone()
     if claimed:
      if p.startswith('/api/'):return self.jout(409,{'error':'Пробный период для этого Telegram-аккаунта уже использован'})
      return self.sendx(409,page('Пробный период использован','<div class="card box"><h2 class=err>Пробный период уже использован</h2><p>Для одной учётной записи доступен только один пробный период.</p><a class=btn href=/#tariffs>Выбрать платный тариф</a></div>'))
-   if not (valid_email or valid_tg or tg or signed or test_mode or p=='/orders'):
+   if not (valid_email or valid_tg or tg or signed or p=='/orders'):
     if p.startswith('/api/'):return self.jout(400,{'error':'Укажите корректный Email или Telegram'})
     return self.sendx(400,page('Контакты','<div class="card box"><h2 class=err>Укажите корректный Email или Telegram</h2><a class="btn soft" href=/>Вернуться</a></div>'))
-   customer=test_username if test_mode else (email or tgname or d.get('customer','') or signed or 'Гость сайта')
+   customer=email or tgname or d.get('customer','') or signed or 'Гость сайта'
    requested=str(d.get('subscription','')).strip();action=str(d.get('action','renew' if requested else 'new'))
-   ownership_tg=None if test_mode else tg
+   ownership_tg=tg
    owned={x.get('email'):x for x in account_clients(uid,ownership_tg) if x.get('email')}
    if action in ('renew','upgrade') and not requested and len(owned)==1:requested=next(iter(owned))
    if action not in ('new','renew','upgrade') or (action in ('renew','upgrade') and requested not in owned):

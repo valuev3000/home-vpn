@@ -11,7 +11,7 @@ import time
 
 
 OUTPUT = pathlib.Path('/var/lib/vpn-shop/system-health.json')
-BACKUP_DIR = pathlib.Path(os.getenv('HOME_VPN_BACKUP_DIR', '/var/backups/home-vpn'))
+BACKUP_DIR = pathlib.Path('/root')
 CERTIFICATES = (
     pathlib.Path('/etc/x-ui/cert/fullchain.pem'),
     pathlib.Path('/etc/x-ui/cert/panel.crt'),
@@ -26,23 +26,11 @@ def main() -> None:
     checks['disk_used_percent']=disk_percent
     if disk_percent >= 90:warnings.append(f'Диск заполнен на {disk_percent}%')
 
-    archives=sorted(BACKUP_DIR.glob('home-vpn-*.tar.gz'),key=lambda path:path.stat().st_mtime,reverse=True)
+    archives=sorted(BACKUP_DIR.glob('kit-backup-*.tar.gz'),key=lambda path:path.stat().st_mtime,reverse=True)
     backup_age_hours=round((now-archives[0].stat().st_mtime)/3600,1) if archives else None
     checks['last_backup_age_hours']=backup_age_hours
     if backup_age_hours is None:warnings.append('Резервные копии не найдены')
     elif backup_age_hours>36:warnings.append(f'Последняя резервная копия создана {backup_age_hours} ч. назад')
-
-    remote_configured=False
-    remote_env=pathlib.Path('/etc/home-vpn-backup.env')
-    if remote_env.is_file():
-        remote_configured=any(line.startswith('HOME_VPN_BACKUP_REMOTE=') and line.split('=',1)[1].strip() for line in remote_env.read_text(encoding='utf-8').splitlines())
-    checks['remote_backup_configured']=remote_configured
-    if remote_configured:
-        marker=pathlib.Path('/var/lib/vpn-shop/remote-backup-success')
-        remote_age_hours=round((now-marker.stat().st_mtime)/3600,1) if marker.is_file() else None
-        checks['last_remote_backup_age_hours']=remote_age_hours
-        if remote_age_hours is None:warnings.append('Нет подтверждения отправки копии на backup-сервер')
-        elif remote_age_hours>36:warnings.append(f'Последняя удалённая копия отправлена {remote_age_hours} ч. назад')
 
     for service in ('vpn-shop','x-ui'):
         active=subprocess.run(['systemctl','is-active','--quiet',service]).returncode==0

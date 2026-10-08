@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily verified 3X-UI KIT backup
+
+[Timer]
+OnCalendar=*-*-* 03:35:00
+RandomizedDelaySec=20m
+Persistent=true
+Unit=home-vpn-kit-backup.service
+
+[Install]
+WantedBy=timers.target

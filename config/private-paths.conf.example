@@ -1,4 +1,3 @@
 [Service]
 # Generate unique random paths during installation. Do not commit real values.
 Environment=ADMIN_ENTRY_PATH=/replace-with-random-admin-path
-Environment=TEST_ENTRY_PATH=/replace-with-random-test-path

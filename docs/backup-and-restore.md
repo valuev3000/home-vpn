@@ -1,107 +1,95 @@
-# Резервное копирование и восстановление
+# Резервное копирование 3X-UI_KIT v1.2
 
-Архив HOME-VPN содержит согласованные SQLite-копии сайта и 3x-ui, конфигурацию
-сайта, systemd unit и TLS-файлы 3x-ui. Секреты находятся внутри архива, поэтому
-файлы создаются с правами `600` и не должны передаваться через публичные сервисы.
+В HOME-VPN `0.0.4-pre` используется штатная логика резервного копирования
+3X-UI_KIT v1.2. Прежняя отдельная backup-панель, pull-agent и сервер
+`home-vpn-backup` удалены из проекта.
 
-## GUI администратора
+## Что сохраняется
 
-Откройте **Админ-панель → Резервные копии**.
+Команда `kit backup` формирует архив конфигурации 3x-ui. Обёртка
+`home-vpn-kit-backup` дополнительно:
 
-### Создание
+- проверяет SQLite-базу `/etc/x-ui/x-ui.db` через `PRAGMA integrity_check`;
+- запускает штатный `kit backup`;
+- находит созданный `/root/kit-backup-*.tar.gz`;
+- сохраняет рядом SHA-256;
+- распаковывает архив во временный каталог и проверяет читаемость SQLite-баз;
+- удаляет локальные архивы старше срока хранения.
 
-Нажмите **Создать резервную копию**. Операция выполняется отдельной systemd-задачей.
-Страница показывает статусы «В очереди», «Выполняется», «Успешно» или «Ошибка».
+Архивы доступны только root. Пароли, токены и закрытые ключи нельзя добавлять
+в Git или пересылать в журнал задания.
 
-### Восстановление
-
-У нужного архива выберите режим:
-
-- **Только сайт** — база пользователей, заказов, тарифов, тикетов и почты;
-- **Только 3x-ui** — база панели, inbound и клиентов;
-- **Сайт и 3x-ui** — обе базы без замены системной конфигурации;
-- **Полностью** — обе базы, `/etc/home-vpn/config.json`, `/etc/vpn-shop.env`,
-  unit сайта и TLS-файлы 3x-ui.
-
-Введите полное имя архива для подтверждения. До любых изменений система:
-
-1. проверяет безопасную структуру архива;
-2. сверяет SHA-256 каждого файла с `manifest.json`;
-3. запускает `PRAGMA integrity_check` для обеих SQLite-баз;
-4. создаёт страховочную копию текущего состояния;
-5. только после этого останавливает выбранные службы и заменяет данные.
-
-## Управление через SSH
-
-Список архивов и состояние последней операции:
+## Расписание и срок хранения
 
 ```bash
-sudo home-vpn-restore list
+sudo systemctl enable --now home-vpn-kit-backup.timer
+sudo systemctl list-timers home-vpn-kit-backup.timer
 ```
 
-Создать копию немедленно:
+Срок хранения по умолчанию — 30 дней. Чтобы изменить его, создайте drop-in:
 
 ```bash
-sudo home-vpn-restore create
+sudo systemctl edit home-vpn-kit-backup.service
 ```
 
-Восстановить только сайт:
+```ini
+[Service]
+Environment=KIT_BACKUP_RETENTION_DAYS=60
+```
+
+Затем выполните:
 
 ```bash
-sudo home-vpn-restore restore home-vpn-20260131-120000.tar.gz site
+sudo systemctl daemon-reload
+sudo systemctl start home-vpn-kit-backup.service
 ```
 
-Восстановить только 3x-ui:
+## Проверка архива
 
 ```bash
-sudo home-vpn-restore restore home-vpn-20260131-120000.tar.gz xui
+sudo systemctl status home-vpn-kit-backup.service --no-pager
+sudo journalctl -u home-vpn-kit-backup.service -n 100 --no-pager
+sudo sha256sum -c /root/kit-backup-YYYYMMDD-HHMM.tar.gz.sha256
+sudo tar -tzf /root/kit-backup-YYYYMMDD-HHMM.tar.gz >/dev/null
 ```
 
-Восстановить обе базы:
+Безопасная тестовая распаковка не затрагивает работающую панель:
 
 ```bash
-sudo home-vpn-restore restore home-vpn-20260131-120000.tar.gz all
+restore_dir=$(sudo mktemp -d /var/tmp/kit-restore-test.XXXXXX)
+sudo tar -xzf /root/kit-backup-YYYYMMDD-HHMM.tar.gz -C "$restore_dir"
+sudo find "$restore_dir" -type f -name '*.db' \
+  -exec sqlite3 {} 'PRAGMA integrity_check;' \;
 ```
 
-Полное восстановление вместе с конфигурацией и TLS:
+Удалите временный каталог после проверки явным абсолютным путём.
 
-```bash
-sudo home-vpn-restore restore home-vpn-20260131-120000.tar.gz full
-```
+## Восстановление
 
-Команда принимает только имя файла из `/var/backups/home-vpn`; абсолютные пути,
-символические ссылки и архивы с посторонними файлами отклоняются.
+1. Изолируйте неисправный LXC и сохраните его диск до окончания проверки.
+2. Разверните совместимую ОС и ту же версию 3X-UI_KIT.
+3. Скопируйте выбранный архив на новый узел и проверьте SHA-256.
+4. Сначала распакуйте архив в отдельный временный каталог.
+5. Проверьте SQLite через `PRAGMA integrity_check` и наличие конфигурации.
+6. Выполните штатное восстановление 3X-UI_KIT:
 
-## Возврат копии с отдельного backup-сервера
+   ```bash
+   sudo bash /root/3x-ui-kit-v1.2.sh \
+     --restore /root/kit-backup-YYYYMMDD-HHMM.tar.gz
+   ```
 
-На backup-сервере архивы находятся в `/srv/home-vpn-backups/primary`. Передайте
-нужный архив на основной сервер по отдельному административному SSH-доступу:
+7. Проверьте права файлов, TLS, firewall и systemd units.
+8. Запустите 3x-ui и выполните smoke-test панели и каждого inbound.
+9. Для RU проверьте синхронизацию PL-inbound; для PL — Telegram-бот и
+   Emergency MTProto.
+10. Создайте новый архив, снова проверьте SHA-256 и тестовую распаковку.
 
-```bash
-scp root@192.168.1.53:/srv/home-vpn-backups/primary/home-vpn-20260131-120000.tar.gz /tmp/
-sudo install -o root -g root -m 600 /tmp/home-vpn-20260131-120000.tar.gz /var/backups/home-vpn/
-sudo home-vpn-restore list
-sudo home-vpn-restore restore home-vpn-20260131-120000.tar.gz all
-```
+Не восстанавливайте архив поверх работающего production-узла без отдельного
+окна работ и подтверждения владельца системы.
 
-Ограниченный пользователь `homevpnbackup` предназначен только для приёма копий
-и не предоставляет обычную оболочку или скачивание архива.
+## Защита от потери LXC
 
-## Аварийное восстановление нового сервера
-
-1. Установите ту же или совместимую версию 3x-ui.
-2. Склонируйте ту же версию HOME-VPN.
-3. Запустите установку сайта через `sudo bash install.sh`.
-4. Скопируйте архив в `/var/backups/home-vpn` с правами `600`.
-5. Выполните полное восстановление.
-6. Проверьте права файлов, домен, TLS и токены дополнительных нод.
-7. Выполните:
-
-```bash
-sudo systemctl status vpn-shop x-ui
-sudo home-vpn-setup doctor
-curl -k https://127.0.0.1/health
-```
-
-Полное восстановление возвращает данные и конфигурацию, но не заменяет файлы
-программного кода. Поэтому репозиторий должен быть развёрнут до восстановления.
+Локальный архив не является off-site-копией. Снимки и архивы LXC должны
+дополнительно забираться средствами Proxmox/NAS в хранилище, к которому сам
+VPN-узел не имеет прав удаления. Этот инфраструктурный экспорт намеренно не
+реализован веб-приложением HOME-VPN и не требует второго GUI-сервера проекта.

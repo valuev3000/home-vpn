@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+RETENTION_DAYS=${KIT_BACKUP_RETENTION_DAYS:-30}
+[[ $RETENTION_DAYS =~ ^[0-9]+$ ]] && ((RETENTION_DAYS >= 1)) || {
+  echo "KIT_BACKUP_RETENTION_DAYS must be a positive integer" >&2
+  exit 2
+}
+
+before=$(find /root -maxdepth 1 -type f -name 'kit-backup-*.tar.gz' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2- || true)
+/usr/local/bin/kit backup
+archive=$(find /root -maxdepth 1 -type f -name 'kit-backup-*.tar.gz' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)
+[[ -n $archive && $archive != "$before" ]] || { echo "kit backup did not create a new archive" >&2; exit 1; }
+
+temporary=$(mktemp -d)
+trap 'rm -rf -- "$temporary"' EXIT
+tar -tzf "$archive" >/dev/null
+tar -xzf "$archive" -C "$temporary" ./etc/x-ui/x-ui.db
+python3 - "$temporary/etc/x-ui/x-ui.db" <<'PY'
+import sqlite3, sys
+connection = sqlite3.connect(sys.argv[1])
+result = connection.execute("PRAGMA integrity_check").fetchone()[0]
+connection.close()
+if result != "ok":
+    raise SystemExit("backup SQLite integrity check failed: " + str(result))
+PY
+
+checksum="${archive}.sha256"
+checksum_tmp="${checksum}.tmp"
+(
+  cd /root
+  sha256sum "$(basename "$archive")" >"$(basename "$checksum_tmp")"
+  sha256sum -c "$(basename "$checksum_tmp")" >/dev/null
+)
+chmod 600 "$checksum_tmp"
+mv -f -- "$checksum_tmp" "$checksum"
+find /root -maxdepth 1 -type f -name 'kit-backup-*.tar.gz' -mtime "+$RETENTION_DAYS" -delete
+find /root -maxdepth 1 -type f -name 'kit-backup-*.tar.gz.sha256' -mtime "+$RETENTION_DAYS" -delete
+echo "verified: $archive"

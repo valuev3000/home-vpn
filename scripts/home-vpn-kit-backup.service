@@ -1,0 +1,11 @@
+[Unit]
+Description=Create and verify a 3X-UI KIT backup
+After=x-ui.service
+
+[Service]
+Type=oneshot
+Environment=KIT_BACKUP_RETENTION_DAYS=30
+ExecStart=/usr/local/sbin/home-vpn-kit-backup
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
