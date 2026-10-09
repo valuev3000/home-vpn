@@ -98,6 +98,43 @@ class CatalogPersistenceTests(unittest.TestCase):
         self.assertFalse(APP.password_ok(user,APP.ADMIN_PASSWORD))
 
 
+class NodeBalancingTests(unittest.TestCase):
+    def setUp(self):
+        handle,self.path=tempfile.mkstemp();os.close(handle);self.previous_db=APP.DB;APP.DB=self.path;APP.init()
+        self.previous_nodes=APP.NODES
+        APP.NODES=[
+            {'id':'one','enabled':True,'accept_new':True,'maintenance':False,'weight':100},
+            {'id':'two','enabled':True,'accept_new':True,'maintenance':False,'weight':100},
+        ]
+        self.original_metrics=APP.node_metrics
+
+    def tearDown(self):
+        APP.node_metrics=self.original_metrics;APP.NODES=self.previous_nodes;APP.DB=self.previous_db;os.unlink(self.path)
+
+    def test_full_outage_has_no_primary_fallback(self):
+        APP.node_metrics=lambda node:{'id':node['id'],'online':False,'weight':node['weight'],'active_users':0}
+        self.assertIsNone(APP.choose_node())
+
+    def test_maintenance_and_accept_new_are_excluded(self):
+        APP.NODES[0]['maintenance']=True;APP.NODES[1]['accept_new']=False
+        APP.node_metrics=lambda node:{'id':node['id'],'online':True,'weight':node['weight'],'active_users':0}
+        self.assertIsNone(APP.choose_node())
+
+    def test_pending_assignments_balance_equal_nodes(self):
+        APP.node_metrics=lambda node:{'id':node['id'],'online':True,'weight':node['weight'],'active_users':0,'cpu':0,'ram_percent':0}
+        choices=[]
+        with APP.db() as connection:
+            for index in range(4):
+                selected=APP.choose_node(connection);choices.append(selected)
+                connection.execute("INSERT INTO orders(token,plan,amount,customer,status,created_at,assigned_node,order_kind) VALUES(?,?,?,?, 'pending',?,?, 'new')",(f'balance-{index}','m1',100,'u',int(APP.time.time()),selected))
+        self.assertEqual(['one','two','one','two'],choices)
+
+    def test_weight_affects_least_connection_score(self):
+        APP.NODES[0]['weight']=200;APP.NODES[1]['weight']=100
+        APP.node_metrics=lambda node:{'id':node['id'],'online':True,'weight':node['weight'],'active_users':0,'cpu':0,'ram_percent':0}
+        self.assertEqual('one',APP.choose_node())
+
+
 class YooKassaPaymentTests(unittest.TestCase):
     def setUp(self):
         handle,self.path=tempfile.mkstemp();os.close(handle);self.previous_db=APP.DB;APP.DB=self.path;APP.init()
@@ -296,14 +333,14 @@ class AdminIdentityTests(unittest.TestCase):
 class TelegramSiteRegistrationTests(unittest.TestCase):
     def setUp(self):
         handle,self.path=tempfile.mkstemp();os.close(handle);APP.DB=self.path;APP.init()
-        self.original_secret=APP.API_SECRET;self.original_panel_clients=APP.panel_clients;self.original_send_account_email=APP.send_account_email;self.original_smtp_host=APP.SMTP_HOST
-        APP.API_SECRET='registration-test-secret';APP.panel_clients=lambda: [];APP.SMTP_HOST='smtp.test'
+        self.original_secret=APP.API_SECRET;self.original_panel_clients=APP.panel_clients;self.original_send_account_email=APP.send_account_email;self.original_smtp_host=APP.SMTP_HOST;self.original_node_metrics=APP.node_metrics
+        APP.API_SECRET='registration-test-secret';APP.panel_clients=lambda: [];APP.SMTP_HOST='smtp.test';APP.node_metrics=lambda node:{'id':node.get('id'),'online':True,'weight':node.get('weight',100),'active_users':0,'cpu':0,'ram_percent':0}
         self.server=APP.ThreadingHTTPServer(('127.0.0.1',0),APP.H)
         self.thread=threading.Thread(target=self.server.serve_forever,daemon=True);self.thread.start()
 
     def tearDown(self):
         self.server.shutdown();self.server.server_close();self.thread.join(timeout=2)
-        APP.API_SECRET=self.original_secret;APP.panel_clients=self.original_panel_clients;APP.send_account_email=self.original_send_account_email;APP.SMTP_HOST=self.original_smtp_host;os.unlink(self.path)
+        APP.API_SECRET=self.original_secret;APP.panel_clients=self.original_panel_clients;APP.send_account_email=self.original_send_account_email;APP.SMTP_HOST=self.original_smtp_host;APP.node_metrics=self.original_node_metrics;os.unlink(self.path)
 
     def register(self):
         body=json.dumps({'telegram_id':987654321,'login':'familia-io','tg_username':'sample_user'}).encode()
@@ -484,6 +521,13 @@ class TelegramSiteRegistrationTests(unittest.TestCase):
         self.assertEqual(response.status,303);self.assertEqual(response.getheader('Location'),'/cart')
         connection.request('GET','/cart',headers={'Cookie':self.user_cookie()});response=connection.getresponse();content=response.read().decode();connection.close()
         self.assertEqual(response.status,200);self.assertIn('Ваши тарифы',content);self.assertIn('190 ₽',content);self.assertIn('Заказ №',content)
+
+    def test_api_full_node_outage_returns_503_without_creating_order(self):
+        APP.node_metrics=lambda node:{'id':node.get('id'),'online':False,'weight':100,'active_users':0}
+        payload=json.dumps({'action':'new','plan':'m1','telegram_id':987654321,'customer':'test'}).encode()
+        connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3);connection.request('POST','/api/orders',payload,{'Content-Type':'application/json','X-API-Key':APP.API_SECRET});response=connection.getresponse();content=json.loads(response.read());connection.close()
+        with APP.db() as database:count=database.execute('SELECT count(*) FROM orders').fetchone()[0]
+        self.assertEqual(503,response.status);self.assertEqual('no_vpn_nodes_available',content['code']);self.assertEqual(0,count)
 
     def test_admin_can_clear_completed_maintenance_history_only(self):
         now=int(APP.time.time())

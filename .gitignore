@@ -11,6 +11,7 @@ __pycache__/
 .tmp-*
 config/config.json
 nodes.json
+topology.local.json
 *-report.json
 payment_timers.json
 last_event*

@@ -21,9 +21,6 @@ apt-get update
 apt-get install -y postfix dovecot-imapd opendkim opendkim-tools \
   sasl2-bin mailutils fail2ban ca-certificates openssl
 
-install -d -m 0755 /etc/systemd/system/postfix.service.d /etc/systemd/system/dovecot.service.d
-install -m 0644 "$script_dir/postfix-lxc.conf" /etc/systemd/system/postfix.service.d/lxc.conf
-install -m 0644 "$script_dir/dovecot-lxc.conf" /etc/systemd/system/dovecot.service.d/lxc.conf
 install -m 0644 "$script_dir/99-home-vpn.conf" /etc/dovecot/conf.d/99-home-vpn.conf
 install -m 0644 "$script_dir/opendkim.conf" /etc/opendkim.conf
 install -m 0644 "$script_dir/home-vpn-mail.local" /etc/fail2ban/jail.d/home-vpn-mail.local

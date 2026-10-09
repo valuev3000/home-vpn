@@ -1,7 +1,7 @@
 [Unit]
 Description=VPN Shop Telegram bot
-After=network-online.target
-Wants=network-online.target
+After=network-online.target home-vpn-bot-egress.service
+Wants=network-online.target home-vpn-bot-egress.service
 
 [Service]
 Type=simple

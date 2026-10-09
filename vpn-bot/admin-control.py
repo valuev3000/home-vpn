@@ -16,23 +16,25 @@ import urllib.request
 
 
 ENV_FILE = pathlib.Path("/etc/vpn-bot.env")
-DEFAULT_MENU = {
-    "welcome_title": "Домашняя приватная сеть",
-    "welcome_text": "Добро пожаловать! Здесь можно оформить и продлить доступ, управлять подключениями и обратиться в поддержку.",
-    "order": ["new", "renew", "upgrade", "subscriptions", "link", "support", "site", "instructions", "status", "notifications"],
-    "items": {
-        "new": {"enabled": True, "label": "➕ Купить новую подписку"},
-        "renew": {"enabled": True, "label": "🔄 Продлить подписку"},
-        "upgrade": {"enabled": True, "label": "⬆️ Изменить тариф"},
-        "subscriptions": {"enabled": True, "label": "📋 Подписки и текущие заказы"},
-        "link": {"enabled": True, "label": "🔗 Привязать подписку"},
-        "support": {"enabled": True, "label": "🎫 Поддержка"},
-        "site": {"enabled": True, "label": "🌐 Перейти на сайт"},
-        "instructions": {"enabled": True, "label": "📖 Инструкции по подключению"},
-        "status": {"enabled": True, "label": "🟢 Статус серверов"},
-        "notifications": {"enabled": True, "label": "🔕 Отписаться от уведомлений"},
-    },
-}
+
+
+def telegram_open(request, values, timeout=15):
+    proxy = values.get("TELEGRAM_PROXY_URL", "http://127.0.0.1:18080").strip()
+    parsed=urllib.parse.urlparse(proxy)
+    if parsed.scheme not in ("http","https") or parsed.hostname not in ("127.0.0.1","::1","localhost"):
+        raise RuntimeError("Прямой Telegram egress запрещён: настройте loopback TELEGRAM_PROXY_URL")
+    # Do not inherit a broad NO_PROXY from the administrator environment:
+    # Telegram notifications must fail closed through the configured egress.
+    os.environ["NO_PROXY"] = "127.0.0.1,localhost"
+    os.environ["no_proxy"] = "127.0.0.1,localhost"
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({"https": proxy, "http": proxy}))
+    return opener.open(request, timeout=timeout)
+def load_default_menu():
+    for path in (pathlib.Path(__file__).resolve().parents[1]/"config/vpn-bot-menu.example.json",pathlib.Path("/usr/local/share/home-vpn/vpn-bot-menu.example.json")):
+        try:return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError,json.JSONDecodeError):pass
+    raise RuntimeError("Не найден единый default Telegram menu")
+DEFAULT_MENU=load_default_menu()
 
 
 def environment():
@@ -171,7 +173,7 @@ def telegram(values, method, payload=None):
     data = urllib.parse.urlencode(payload or {}).encode()
     request = urllib.request.Request(f"https://api.telegram.org/bot{token}/{method}", data=data)
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:result = json.load(response)
+        with telegram_open(request, values, timeout=15) as response:result = json.load(response)
     except urllib.error.HTTPError as error:
         try:result=json.loads(error.read().decode())
         except Exception:result={}

@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily HOME-VPN Telegram bot state backup
+
+[Timer]
+OnCalendar=*-*-* 04:15:00
+RandomizedDelaySec=20m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

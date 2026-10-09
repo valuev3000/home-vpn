@@ -1,0 +1,22 @@
+{
+  "site": {
+    "services": ["vpn-shop", "home-vpn-healthcheck.timer", "home-vpn-system-check.timer", "home-vpn-site-backup.timer"],
+    "runtime": ["/opt/vpn-shop", "/etc/systemd/system/vpn-shop.service", "/usr/local/sbin/home-vpn-healthcheck", "/usr/local/sbin/home-vpn-system-check", "/etc/systemd/system/home-vpn-healthcheck.service", "/etc/systemd/system/home-vpn-healthcheck.timer", "/etc/systemd/system/home-vpn-system-check.service", "/etc/systemd/system/home-vpn-system-check.timer", "/etc/systemd/system/home-vpn-site-backup.service", "/etc/systemd/system/home-vpn-site-backup.timer", "/etc/nginx/sites-available/home-vpn.conf", "/etc/nginx/sites-enabled/home-vpn.conf"],
+    "data": ["/var/lib/vpn-shop", "/etc/vpn-shop.env", "/etc/home-vpn/config.json"]
+  },
+  "bot": {
+    "services": ["vpn-bot", "vpn-bot-admin", "home-vpn-bot-egress", "home-vpn-bot-backup.timer"],
+    "runtime": ["/opt/vpn-bot", "/etc/systemd/system/vpn-bot.service", "/etc/systemd/system/vpn-bot-admin.service", "/etc/systemd/system/home-vpn-bot-egress.service", "/etc/systemd/system/home-vpn-bot-backup.service", "/etc/systemd/system/home-vpn-bot-backup.timer", "/etc/sudoers.d/vpn-bot-admin", "/usr/local/sbin/vpn-bot-admin-control", "/etc/home-vpn/bot-egress.json", "/etc/home-vpn/bot-egress-ownership.json"],
+    "data": ["/var/lib/vpn-bot", "/etc/vpn-bot.env", "/etc/vpn-bot-admin.env", "/etc/vpn-bot-menu.json"]
+  },
+  "placeholder": {
+    "services": ["home-vpn-placeholder"],
+    "runtime": ["/opt/home-vpn-placeholder", "/etc/systemd/system/home-vpn-placeholder.service", "/etc/home-vpn-placeholder.env"],
+    "data": ["/etc/home-vpn/placeholder.html"]
+  },
+  "mail": {
+    "services": [],
+    "runtime": ["/etc/dovecot/conf.d/99-home-vpn.conf", "/etc/fail2ban/jail.d/home-vpn-mail.local"],
+    "data": ["/etc/home-vpn-mail", "/root/home-vpn-mail-credentials.txt"]
+  }
+}

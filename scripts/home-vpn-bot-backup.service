@@ -1,0 +1,10 @@
+[Unit]
+Description=Create and verify HOME-VPN Telegram bot state backup
+After=vpn-bot.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/home-vpn-state-backup create bot
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

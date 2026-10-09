@@ -129,7 +129,7 @@ def main():
     report = {
         "created_at": int(time.time()),
         "mode": "apply" if args.apply else "dry-run",
-        "central": central.get("name", "RU-1"),
+        "central": central.get("name", "Central"),
         "actions": [],
         "summary": {"existing": 0, "imported": 0, "planned_import": 0, "conflict": 0, "failed": 0, "aliases": 0},
     }

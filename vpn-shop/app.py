@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import base64,hashlib,hmac,html,imaplib,io,json,math,mimetypes,os,pathlib,secrets,shutil,smtplib,sqlite3,ssl,subprocess,time,threading,urllib.error,urllib.request,uuid
+import base64,hashlib,hmac,html,http.client,imaplib,io,json,math,mimetypes,os,pathlib,secrets,shutil,smtplib,sqlite3,ssl,subprocess,time,threading,urllib.error,urllib.request,uuid
 from decimal import Decimal,InvalidOperation
 from email import policy
 from email.header import decode_header
@@ -13,7 +13,14 @@ TLS_CERT=os.getenv('TLS_CERT','').strip();TLS_KEY=os.getenv('TLS_KEY','').strip(
 ASSET_ROOT=pathlib.Path(os.getenv('ASSET_ROOT','/srv/home-vpn/assets')).resolve();DOWNLOAD_ROOT=pathlib.Path(os.getenv('DOWNLOAD_ROOT','/srv/home-vpn/downloads')).resolve()
 TRUST_PROXY=os.getenv('TRUST_PROXY','0')=='1'
 CONFIG_FILE=os.getenv('HOME_VPN_CONFIG','/etc/home-vpn/config.json')
-DEFAULT_CONFIG={'branding':{'name':'HOME-VPN','tagline':'Домашняя свобода','subtitle':'Безопасный интернет каждый день'},'pricing':{'currency':'₽','max_devices':5,'traffic_gb':0,'device_monthly':{'1':100,'2':190,'3':280,'4':370,'5':460},'periods':{'m1':{'name':'1 месяц','days':30,'multiplier':1},'m3':{'name':'3 месяца','days':90,'multiplier':2.8},'m6':{'name':'6 месяцев','days':180,'multiplier':5.6},'y1':{'name':'1 год','days':365,'multiplier':10}},'trial':{'enabled':True,'name':'Пробный · 3 дня','days':3,'price':0,'devices':1}},'payment':{'mode':'manual','provider_name':'Оплата','url':''},'nodes':[{'id':'main','name':'Основная нода','country':'RU','flag':'🌐','primary':True,'enabled':True,'panel_url':'','token_env':'XUI_TOKEN','inbound_ids':[1,2,3,4],'routes':[]}]}
+def load_default_config():
+ for path in (pathlib.Path(__file__).resolve().parents[1]/'config/config.example.json',pathlib.Path('/usr/local/share/home-vpn/config.example.json')):
+  try:
+   with path.open(encoding='utf-8') as f:data=json.load(f)
+   if isinstance(data,dict):return data
+  except (OSError,json.JSONDecodeError):pass
+ raise RuntimeError('Не найден единый default config: /usr/local/share/home-vpn/config.example.json')
+DEFAULT_CONFIG=load_default_config()
 def load_config():
  try:
   with open(CONFIG_FILE,encoding='utf-8') as f:data=json.load(f)
@@ -25,8 +32,8 @@ def load_json_file(path,default=None):
 CONFIG=load_config();PRICING=CONFIG.get('pricing') or DEFAULT_CONFIG['pricing'];NODES=[x for x in (CONFIG.get('nodes') or []) if isinstance(x,dict) and x.get('enabled',True)];PRIMARY_NODE=next((x for x in NODES if x.get('primary')),NODES[0] if NODES else DEFAULT_CONFIG['nodes'][0])
 PUBLIC=os.getenv('PUBLIC_URL','http://127.0.0.1:8080').rstrip('/'); API_SECRET=os.getenv('API_SECRET','change-me'); SESSION=os.getenv('SESSION_SECRET','change-me').encode(); ADMIN_TG=int(os.getenv('TELEGRAM_ADMIN_ID','0') or 0)
 SMTP_HOST=os.getenv('SMTP_HOST','').strip();SMTP_PORT=int(os.getenv('SMTP_PORT','587') or 587);SMTP_USER=os.getenv('SMTP_USERNAME','').strip();SMTP_PASSWORD=os.getenv('SMTP_PASSWORD','');SMTP_STARTTLS=os.getenv('SMTP_STARTTLS','1')=='1';SMTP_SSL=os.getenv('SMTP_SSL','0')=='1';MAIL_FROM=os.getenv('MAIL_FROM','support@my.domain.ru').strip();MAIL_REPLY_TO=os.getenv('MAIL_REPLY_TO',MAIL_FROM).strip();MAIL_SETTINGS_KEY=os.getenv('MAIL_SETTINGS_KEY','').encode()
-ADMIN=os.getenv('ADMIN_USER','home-admin'); ADMIN_PASSWORD=os.getenv('ADMIN_PASSWORD','change-me'); BOT_URL=os.getenv('TELEGRAM_BOT_URL','https://t.me/your_bot');BOT_ADMIN_URL=os.getenv('BOT_ADMIN_URL','').strip(); XURL=(PRIMARY_NODE.get('panel_url') or os.getenv('XUI_URL','')).rstrip('/'); XTOKEN=os.getenv(str(PRIMARY_NODE.get('token_env') or 'XUI_TOKEN'),os.getenv('XUI_TOKEN','')); XIDS=[int(x) for x in (PRIMARY_NODE.get('inbound_ids') or [int(v) for v in os.getenv('XUI_INBOUND_IDS','1').split(',')])]
-MTPROTO_INBOUND_ID=int(os.getenv('MTPROTO_INBOUND_ID','0') or 0);MTPROTO_PUBLIC_HOST=os.getenv('MTPROTO_PUBLIC_HOST','').strip();MTPROTO_PUBLIC_PORT=int(os.getenv('MTPROTO_PUBLIC_PORT','0') or 0);MTPROTO_XUI_URL=os.getenv('MTPROTO_XUI_URL','').rstrip('/');MTPROTO_XUI_TOKEN=os.getenv(os.getenv('MTPROTO_XUI_TOKEN_ENV','PL_XUI_TOKEN'),'');MTPROTO_GUEST_SECONDS=3600;MTPROTO_COOLDOWN_SECONDS=30*86400
+ADMIN=os.getenv('ADMIN_USER','home-admin'); ADMIN_PASSWORD=os.getenv('ADMIN_PASSWORD','change-me'); BOT_URL=os.getenv('TELEGRAM_BOT_URL','https://t.me/your_bot');BOT_ADMIN_URL=os.getenv('BOT_ADMIN_URL','').strip();BOT_ADMIN_PATH=urlparse(BOT_ADMIN_URL).path.rstrip('/') if BOT_ADMIN_URL and urlparse(BOT_ADMIN_URL).hostname==urlparse(PUBLIC).hostname else ''; XURL=(PRIMARY_NODE.get('panel_url') or os.getenv('XUI_URL','')).rstrip('/'); XTOKEN=os.getenv(str(PRIMARY_NODE.get('token_env') or 'XUI_TOKEN'),os.getenv('XUI_TOKEN','')); XIDS=[int(x) for x in (PRIMARY_NODE.get('inbound_ids') or [int(v) for v in os.getenv('XUI_INBOUND_IDS','1').split(',')])]
+MTPROTO_INBOUND_ID=int(os.getenv('MTPROTO_INBOUND_ID','0') or 0);MTPROTO_PUBLIC_HOST=os.getenv('MTPROTO_PUBLIC_HOST','').strip();MTPROTO_PUBLIC_PORT=int(os.getenv('MTPROTO_PUBLIC_PORT','0') or 0);MTPROTO_XUI_URL=os.getenv('MTPROTO_XUI_URL','').rstrip('/');MTPROTO_XUI_TOKEN=os.getenv(os.getenv('MTPROTO_XUI_TOKEN_ENV','FOREIGN_XUI_TOKEN'),'');MTPROTO_GUEST_SECONDS=3600;MTPROTO_COOLDOWN_SECONDS=30*86400
 BRANDING=CONFIG.get('branding') or DEFAULT_CONFIG['branding'];BRAND_NAME=str(BRANDING.get('name') or 'HOME-VPN');BRAND_TAGLINE=str(BRANDING.get('tagline') or 'Домашняя свобода');BRAND_SUBTITLE=str(BRANDING.get('subtitle') or 'Безопасный интернет каждый день')
 PAYMENT=CONFIG.get('payment') or {};PAYMENT_URL=(str(PAYMENT.get('url') or '') or os.getenv('PAYMENT_URL','')).strip();PAYMENT_PROVIDER=str(PAYMENT.get('provider_name') or 'Оплата');PAYMENT_PROVIDER='Оплата' if PAYMENT_PROVIDER=='Оплата по инструкции администратора' else PAYMENT_PROVIDER
 YOOKASSA_SHOP_ID=os.getenv('YOOKASSA_SHOP_ID','').strip();YOOKASSA_SECRET_KEY=os.getenv('YOOKASSA_SECRET_KEY','');YOOKASSA_API_URL=os.getenv('YOOKASSA_API_URL','https://api.yookassa.ru/v3').rstrip('/');YOOKASSA_RETURN_URL=os.getenv('YOOKASSA_RETURN_URL','').strip();YOOKASSA_LOCK=threading.Lock()
@@ -386,6 +393,28 @@ def node_xapi(node,method,path,body=None):
  if not token:raise RuntimeError('На сервере сайта не задана переменная '+str(node.get('token_env') or 'с API-токеном'))
  req=urllib.request.Request(url+path,data=json.dumps(body).encode() if body is not None else None,method=method,headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
  with urllib.request.urlopen(req,context=ssl._create_unverified_context(),timeout=15) as response:return json.loads(response.read())
+def node_by_id(node_id):
+ return next((node for node in NODES if str(node.get('id'))==str(node_id)),PRIMARY_NODE)
+def api_for_node(node,method,path,body=None):
+ return xapi(method,path,body) if str(node.get('id'))==str(PRIMARY_NODE.get('id')) else node_xapi(node,method,path,body)
+def subscription_node_id(email):
+ if not email:return str(PRIMARY_NODE.get('id') or 'main')
+ with db() as c:row=c.execute("SELECT assigned_node FROM orders WHERE (xui_email=? OR target_email=?) AND assigned_node IS NOT NULL ORDER BY id DESC LIMIT 1",(email,email)).fetchone()
+ if row and row['assigned_node']:return str(row['assigned_node'])
+ for node in NODES:
+  try:
+   client=(api_for_node(node,'GET','/panel/api/clients/get/'+quote(email)).get('obj') or {}).get('client') or {}
+   if client:return str(node.get('id') or PRIMARY_NODE.get('id') or 'main')
+  except Exception:pass
+ return str(PRIMARY_NODE.get('id') or 'main')
+def api_for_email(email,method,path,body=None):return api_for_node(node_by_id(subscription_node_id(email)),method,path,body)
+def order_node(order):
+ assigned=order['assigned_node'] if 'assigned_node' in order.keys() and order['assigned_node'] else None
+ if assigned:
+  node=next((item for item in NODES if str(item.get('id'))==str(assigned)),None)
+  if not node:raise RuntimeError('Назначенная нода подписки отсутствует в конфигурации: '+str(assigned))
+  return node
+ return PRIMARY_NODE
 def mtproto_xapi(method,path,body=None):
  if not MTPROTO_XUI_URL or not MTPROTO_XUI_TOKEN:raise RuntimeError('API MTProto-ноды не настроен')
  req=urllib.request.Request(MTPROTO_XUI_URL+path,data=json.dumps(body).encode() if body is not None else None,method=method,headers={'Authorization':'Bearer '+MTPROTO_XUI_TOKEN,'Content-Type':'application/json'})
@@ -402,8 +431,15 @@ def discover_node_routes(node):
   routes.append({'name':str(inbound.get('remark') or f"inbound-{inbound.get('id')}"),'inbound_id':int(inbound.get('id')),'protocol':str(inbound.get('protocol') or ''),'transport':str(stream.get('network') or 'tcp'),'enabled':bool(inbound.get('enable',True))})
  return routes
 def panel_clients():
- obj=xapi('GET','/panel/api/clients/list').get('obj') or []
- return [x for x in obj if isinstance(x,dict) and x.get('email')] if isinstance(obj,list) else []
+ result=[]
+ for node in NODES:
+  try:items=api_for_node(node,'GET','/panel/api/clients/list').get('obj') or []
+  except Exception:continue
+  if isinstance(items,list):
+   for item in items:
+    if isinstance(item,dict) and item.get('email'):
+     copy=dict(item);copy['_node_id']=str(node.get('id'));result.append(copy)
+ return result
 def account_clients(user_id=None,telegram_id=None):
  emails=set()
  with db() as c:
@@ -417,14 +453,14 @@ def owned_subscription(user_id=None,telegram_id=None):
   if not row and telegram_id:row=c.execute("SELECT xui_email FROM orders WHERE telegram_id=? AND status='active' AND xui_email IS NOT NULL ORDER BY id DESC LIMIT 1",(int(telegram_id),)).fetchone()
  if row:
   try:
-   client=(xapi('GET','/panel/api/clients/get/'+quote(row['xui_email'])).get('obj') or {}).get('client') or {}
+   client=(api_for_email(row['xui_email'],'GET','/panel/api/clients/get/'+quote(row['xui_email'])).get('obj') or {}).get('client') or {}
    if client:return row['xui_email'],client
   except Exception:pass
  if telegram_id:
   try:
    found=[x for x in panel_clients() if int(x.get('tgId') or 0)==int(telegram_id)]
    if len(found)==1:
-    client=(xapi('GET','/panel/api/clients/get/'+quote(found[0]['email'])).get('obj') or {}).get('client') or found[0]
+    client=(api_for_email(found[0]['email'],'GET','/panel/api/clients/get/'+quote(found[0]['email'])).get('obj') or {}).get('client') or found[0]
     return found[0]['email'],client
   except Exception:pass
  return None,{}
@@ -515,9 +551,9 @@ def apply_scheduled_changes():
  with db() as c:due=c.execute("SELECT s.* FROM scheduled_changes s JOIN orders o ON o.id=s.order_id WHERE s.applied_at IS NULL AND s.effective_at<=? AND o.status='active' ORDER BY s.effective_at,s.order_id",(now,)).fetchall()
  for change in due:
   try:
-   client=(xapi('GET','/panel/api/clients/get/'+quote(change['email'])).get('obj') or {}).get('client') or {}
+   client=(api_for_email(change['email'],'GET','/panel/api/clients/get/'+quote(change['email'])).get('obj') or {}).get('client') or {}
    if not client:continue
-   client['limitIp']=int(change['limit_ip']);r=xapi('POST','/panel/api/clients/update/'+quote(change['email']),client_payload(client))
+   client['limitIp']=int(change['limit_ip']);r=api_for_email(change['email'],'POST','/panel/api/clients/update/'+quote(change['email']),client_payload(client))
    if r.get('success'):
     with db() as c:c.execute('UPDATE scheduled_changes SET applied_at=? WHERE order_id=?',(int(time.time()),change['order_id']))
   except Exception:pass
@@ -556,11 +592,11 @@ def _provision(o):
    u=c.execute('SELECT username FROM users WHERE id=?',(o['user_id'],)).fetchone();email=u['username'] if u and not u['username'].startswith('tg_') else None
   if not email and o['telegram_id']:
    b=c.execute('SELECT login FROM bot_profiles WHERE telegram_id=?',(o['telegram_id'],)).fetchone();email=b['login'] if b else None
- email=unique_client_name(email or ('admin-test' if o['telegram_id'] and int(o['telegram_id'])==admin_telegram_id() else f"shop-{o['id']}"));p=order_plan(o);traffic_limit=p[4]*1024*1024*1024
- body={'client':{'email':email,'totalGB':traffic_limit,'expiryTime':int((time.time()+p[1]*86400)*1000),'tgId':o['telegram_id'] or 0,'limitIp':p[3],'enable':True,'comment':f"{BRAND_NAME} · {p[3]} device(s)"},'inboundIds':XIDS}
- r=xapi('POST','/panel/api/clients/add',body)
+ email=unique_client_name(email or ('admin-test' if o['telegram_id'] and int(o['telegram_id'])==admin_telegram_id() else f"shop-{o['id']}"));p=order_plan(o);traffic_limit=p[4]*1024*1024*1024;node=order_node(o);node_ids=[int(value) for value in (node.get('inbound_ids') or XIDS)]
+ body={'client':{'email':email,'totalGB':traffic_limit,'expiryTime':int((time.time()+p[1]*86400)*1000),'tgId':o['telegram_id'] or 0,'limitIp':p[3],'enable':True,'comment':f"{BRAND_NAME} · {p[3]} device(s)"},'inboundIds':node_ids}
+ r=api_for_node(node,'POST','/panel/api/clients/add',body)
  if not r.get('success'):raise RuntimeError('Не удалось создать подписку')
- uid=xapi('GET','/panel/api/clients/get/'+quote(email))['obj']['client']['uuid'];links=[x for x in (xapi('GET','/panel/api/inbounds/allLinks').get('obj') or []) if uid in x]
+ uid=api_for_node(node,'GET','/panel/api/clients/get/'+quote(email))['obj']['client']['uuid'];links=[x for x in (api_for_node(node,'GET','/panel/api/inbounds/allLinks').get('obj') or []) if uid in x]
  if len(links)<4:raise RuntimeError(f'получено ссылок: {len(links)}')
  with db() as c:c.execute("UPDATE orders SET status='active',xui_email=?,vpn_uri=?,paid_at=?,expires_at=NULL,error=NULL WHERE id=?",(email,'\n'.join(links),int(time.time()),o['id']))
 def provision(o):
@@ -571,7 +607,7 @@ def provisional_payment(o):
   provision(o)
   with db() as c:c.execute("UPDATE orders SET status='review',new_client=1,expires_at=NULL WHERE id=?",(o['id'],))
   return
- obj=xapi('GET','/panel/api/clients/get/'+quote(target)).get('obj') or {};client=obj.get('client') or {}
+ node=order_node(o);obj=api_for_node(node,'GET','/panel/api/clients/get/'+quote(target)).get('obj') or {};client=obj.get('client') or {}
  if not client:raise RuntimeError('Подписка не найдена')
  now=int(time.time()*1000);prev=int(client.get('expiryTime') or 0);prev_limit=int(client.get('limitIp') or 0);base=max(now,prev);effective_at=base
  if o['order_kind']=='upgrade':
@@ -580,9 +616,9 @@ def provisional_payment(o):
  else:
   client['expiryTime']=base+p[1]*86400000;client['limitIp']=prev_limit
  client['totalGB']=p[4]*1024*1024*1024;client['enable']=True
- r=xapi('POST','/panel/api/clients/update/'+quote(target),client_payload(client))
+ r=api_for_node(node,'POST','/panel/api/clients/update/'+quote(target),client_payload(client))
  if not r.get('success'):raise RuntimeError('Не удалось изменить подписку')
- links=xapi('GET','/panel/api/clients/links/'+quote(target)).get('obj') or []
+ links=api_for_node(node,'GET','/panel/api/clients/links/'+quote(target)).get('obj') or []
  with db() as c:
   c.execute("UPDATE orders SET status='review',xui_email=?,vpn_uri=?,previous_expiry=?,previous_limit_ip=?,new_client=0,paid_at=?,expires_at=NULL,error=NULL WHERE id=?",(target,'\n'.join(links),prev,prev_limit,int(time.time()),o['id']))
   if o['order_kind']=='upgrade':c.execute('DELETE FROM scheduled_changes WHERE email=? AND applied_at IS NULL',(target,))
@@ -618,15 +654,16 @@ def confirm_payment(o):
   return False,str(e),'error'
 def rollback_order(o):
  try:
+  node=order_node(o)
   with db() as c:remaining=c.execute("SELECT plan FROM orders WHERE id<>? AND xui_email=? AND status IN ('active','review') ORDER BY created_at DESC LIMIT 1",(o['id'],o['xui_email'])).fetchone()
   if o['new_client'] and not remaining:
-   r=xapi('POST','/panel/api/clients/del/'+quote(o['xui_email']),{})
+   r=api_for_node(node,'POST','/panel/api/clients/del/'+quote(o['xui_email']),{})
    if not r.get('success') and 'not found' not in str(r.get('msg','')).lower():raise RuntimeError(r.get('msg','Ошибка удаления'))
   else:
-   obj=xapi('GET','/panel/api/clients/get/'+quote(o['xui_email'])).get('obj') or {};client=obj.get('client') or {}
+   obj=api_for_node(node,'GET','/panel/api/clients/get/'+quote(o['xui_email'])).get('obj') or {};client=obj.get('client') or {}
    if not client:raise RuntimeError('Подписка не найдена — остальные подписки сохранены, требуется восстановление')
    client['expiryTime']=int(o['previous_expiry'] or 0);client['limitIp']=int(o['previous_limit_ip'] or 0)
-   r=xapi('POST','/panel/api/clients/update/'+quote(o['xui_email']),client_payload(client))
+   r=api_for_node(node,'POST','/panel/api/clients/update/'+quote(o['xui_email']),client_payload(client))
    if not r.get('success'):raise RuntimeError(r.get('msg','Ошибка отката'))
   with db() as c:c.execute('DELETE FROM scheduled_changes WHERE order_id=?',(o['id'],))
   return True,''
@@ -835,7 +872,7 @@ def scheduled_status(email):
  return ''.join(f'<div class="callout warn"><b>Запланировано изменение тарифа</b><br>После окончания текущего периода — {date_text(r["effective_at"])} — будет установлен лимит {r["limit_ip"]} устройств.<br>Ссылка подписки останется прежней.</div>' for r in rows)
 def used_devices(email):
  try:
-  obj=xapi('POST','/panel/api/clients/ips/'+quote(email),{}).get('obj') or []
+  obj=api_for_email(email,'POST','/panel/api/clients/ips/'+quote(email),{}).get('obj') or []
   return len(obj) if isinstance(obj,list) else 0
  except Exception:return 0
 def format_bytes(value):
@@ -846,7 +883,7 @@ def format_bytes(value):
 def client_devices(email):
  items=[]
  try:
-  ips=xapi('POST','/panel/api/clients/ips/'+quote(email),{}).get('obj') or []
+  ips=api_for_email(email,'POST','/panel/api/clients/ips/'+quote(email),{}).get('obj') or []
   for index,item in enumerate(ips,1):
    raw=str(item);stamp=0
    if '(' in raw and raw.endswith(')'):
@@ -855,7 +892,7 @@ def client_devices(email):
    key='ip-'+hashlib.sha256(raw.encode()).hexdigest()[:16];items.append({'id':key,'source_id':raw,'kind':'ip','name':f'Устройство {index}','address':raw,'last_seen':stamp})
  except Exception:pass
  try:
-  result=xapi('POST','/panel/api/clients/hwids/'+quote(email),{}).get('obj') or []
+  result=api_for_email(email,'POST','/panel/api/clients/hwids/'+quote(email),{}).get('obj') or []
   if isinstance(result,dict):result=result.get('hwids') or result.get('items') or []
   for item in result if isinstance(result,list) else []:
    source=str(item.get('id') or item.get('hwid') or item) if isinstance(item,dict) else str(item);key='hwid-'+hashlib.sha256(source.encode()).hexdigest()[:16]
@@ -874,11 +911,17 @@ def node_metrics(node):
   item.update({'online':str((state.get('xray') or {}).get('state',state.get('xrayState',''))).lower() in ('online','running','active','true'),'cpu':round(float(state.get('cpu') or 0),1),'ram_percent':round(100*float((state.get('mem') or {}).get('current') or 0)/max(1,float((state.get('mem') or {}).get('total') or 1)),1),'disk_percent':round(100*float((state.get('disk') or {}).get('current') or 0)/max(1,float((state.get('disk') or {}).get('total') or 1)),1),'network_up':int((state.get('netIO') or {}).get('up') or 0),'network_down':int((state.get('netIO') or {}).get('down') or 0),'traffic_sent':int((state.get('netTraffic') or {}).get('sent') or 0),'traffic_received':int((state.get('netTraffic') or {}).get('recv') or 0),'active_users':sum(1 for x in clients if x.get('enable') and (not int(x.get('expiryTime') or 0) or int(x.get('expiryTime') or 0)>now))})
  except Exception as error:item['error']=str(error)
  return item
-def choose_node():
+def choose_node(connection=None):
  candidates=[node_metrics(n) for n in NODES if n.get('enabled',True) and n.get('accept_new',True) and not n.get('maintenance',False)]
  candidates=[x for x in candidates if x.get('online')]
- if not candidates:return str(PRIMARY_NODE.get('id') or 'main')
- return min(candidates,key=lambda x:(x.get('cpu',100)+x.get('ram_percent',100)+x.get('active_users',0)*2)/max(1,x.get('weight',100)))['id']
+ if not candidates:return None
+ own_connection=connection is None;c=connection or db()
+ try:
+  pending={str(row[0]):int(row[1]) for row in c.execute("SELECT assigned_node,count(*) FROM orders WHERE assigned_node IS NOT NULL AND COALESCE(order_kind,'new')='new' AND status IN ('pending','processing','review','payment_pending','payment_error') GROUP BY assigned_node")}
+ finally:
+  if own_connection:c.close()
+ for item in candidates:item['pending_assignments']=pending.get(str(item['id']),0)
+ return min(candidates,key=lambda x:((x.get('active_users',0)+x.get('pending_assignments',0)+1)/max(1,x.get('weight',100)),x.get('cpu',100)+x.get('ram_percent',100),str(x.get('id'))))['id']
 def status_data():
  out={'shop':'online','database':'online','panel':'offline','xray':'unknown','nodes':[],'primary':{'name':PRIMARY_NODE_NAME,'flag':PRIMARY_NODE_FLAG}}
  try:
@@ -1039,8 +1082,31 @@ class H(BaseHTTPRequestHandler):
   self.send_response(303);self.send_header('Location',url)
   for value in (cookie if isinstance(cookie,(list,tuple)) else [cookie] if cookie else []):self.send_header('Set-Cookie',value)
   self.end_headers()
+ def bot_admin_proxy(self):
+  """Publish the loopback-only bot panel through the site's TLS endpoint."""
+  path=urlparse(self.path).path
+  if not BOT_ADMIN_PATH or not (path==BOT_ADMIN_PATH or path.startswith(BOT_ADMIN_PATH+'/')):return False
+  length=int(self.headers.get('Content-Length','0') or 0)
+  if length>1024*1024:return bool(self.sendx(413,'Запрос слишком большой.','text/plain; charset=utf-8') is None)
+  body=self.rfile.read(length) if length else None
+  headers={key:value for key,value in self.headers.items() if key.lower() not in ('host','connection','content-length','transfer-encoding','x-forwarded-for','x-real-ip')}
+  headers['Host']='127.0.0.1:8090';headers['X-Real-IP']=self.request_ip();headers['X-Forwarded-Proto']='https' if TLS_CERT or PUBLIC.startswith('https://') else 'http'
+  try:
+   connection=http.client.HTTPConnection('127.0.0.1',8090,timeout=15);connection.request(self.command,self.path,body,headers);response=connection.getresponse();payload=response.read()
+   self.send_response(response.status)
+   for key,value in response.getheaders():
+    if key.lower() not in ('connection','transfer-encoding','content-length','server','date'):self.send_header(key,value)
+   self.send_header('Content-Length',str(len(payload)));self.send_header('X-Content-Type-Options','nosniff');self.end_headers()
+   if self.command!='HEAD':self.wfile.write(payload)
+  except OSError:
+   self.sendx(503,'Панель Telegram-бота временно недоступна.','text/plain; charset=utf-8')
+  finally:
+   try:connection.close()
+   except Exception:pass
+  return True
  def do_GET(self):
   p=urlparse(self.path).path
+  if self.bot_admin_proxy():return
   if self.limited('auth' if p in ('/login','/register','/2fa-login','/forgot-password','/reset-password') or p==ADMIN_ENTRY else 'general'):return
   if p.startswith('/assets/'):return self.static_file('/assets/',ASSET_ROOT)
   if p.startswith('/files/'):return self.static_file('/files/',DOWNLOAD_ROOT,True)
@@ -1369,7 +1435,7 @@ class H(BaseHTTPRequestHandler):
     delete='' if node.get('primary') else f'''<form method=post action=/admin/config/node/delete onsubmit="return confirm('Удалить ноду {html.escape(str(node.get('name','')))} из конфигурации?')"><input type=hidden name=index value={index}><button class=delbtn>Удалить ноду</button></form>'''
     sync=f'''<form method=post action=/admin/config/node/sync><input type=hidden name=index value={index}><button class="btn soft">↻ Получить inbound и маршруты из 3x-ui</button></form>'''
     node_forms.append(f'''<div class=card><h2>{'⭐ ' if node.get('primary') else ''}{html.escape(str(node.get('name','Нода')))}</h2><form method=post action=/admin/config/node><input type=hidden name=index value={index}><label>ID</label><input name=node_id value="{html.escape(str(node.get('id','')),quote=True)}" required><label>Название</label><input name=name value="{html.escape(str(node.get('name','')),quote=True)}" required><label>Страна</label><input name=country value="{html.escape(str(node.get('country','')),quote=True)}"><label>Флаг</label><select name=flag>{flag_select(node.get('flag','🌐'))}</select><label>URL API 3x-ui</label><input name=panel_url value="{html.escape(str(node.get('panel_url','')),quote=True)}"><label>Переменная окружения с API-токеном</label><input name=token_env value="{html.escape(str(node.get('token_env','XUI_TOKEN')),quote=True)}" readonly><small>Секрет хранится только в /etc/vpn-shop.env. После добавления ноды нажмите синхронизацию.</small><label>Inbound ID через запятую</label><input name=inbound_ids value="{html.escape(inbounds,quote=True)}"><label>Существующий домен подписки</label><input name=subscription_base_url value="{html.escape(str(node.get('subscription_base_url','')),quote=True)}"><label>Вес при распределении</label><input type=number min=1 max=100 name=weight value="{int(node.get('weight',100))}"><label>Маршруты</label><textarea name=routes placeholder="reality|1|vless|tcp">{html.escape(routes)}</textarea><label><input type=checkbox name=primary value=1 {'checked' if node.get('primary') else ''}> Основная нода</label><label><input type=checkbox name=enabled value=1 {'checked' if node.get('enabled',True) else ''}> Включена</label><label><input type=checkbox name=accept_new value=1 {'checked' if node.get('accept_new',True) else ''}> Выдавать новым пользователям</label><label><input type=checkbox name=maintenance value=1 {'checked' if node.get('maintenance',False) else ''}> Техническое обслуживание</label><button class=btn>Сохранить ноду</button></form>{sync}{delete}</div>''')
-   new_node=f'''<div class=card><h2>Добавить сервер</h2><form method=post action=/admin/config/node><input type=hidden name=index value=new><label>ID</label><input name=node_id placeholder=pl-2 required><label>Название</label><input name=name placeholder="PL — дополнительный" required><label>Страна</label><input name=country placeholder=PL><label>Флаг</label><select name=flag>{flag_select('🌐')}</select><label>URL API</label><input name=panel_url placeholder="https://node2.my.domain.ru:2053/panel-path"><label>Переменная окружения с API-токеном</label><input name=token_env placeholder=PL_XUI_TOKEN><label>Inbound ID через запятую</label><input name=inbound_ids placeholder=1,2,3><label>Вес при распределении</label><input type=number min=1 max=100 name=weight value=100><label>Маршруты</label><textarea name=routes placeholder="reality|1|vless|tcp&#10;xhttp|2|vless|xhttp"></textarea><label><input type=checkbox name=enabled value=1 checked> Включен</label><label><input type=checkbox name=accept_new value=1 checked> Выдавать новым пользователям</label><button class=btn>Добавить сервер</button></form></div>'''
+   new_node=f'''<div class=card><h2>Добавить сервер</h2><form method=post action=/admin/config/node><input type=hidden name=index value=new><label>ID</label><input name=node_id placeholder=foreign-2 required><label>Название</label><input name=name placeholder="Зарубежная нода 2" required><label>Страна</label><input name=country placeholder=DE><label>Флаг</label><select name=flag>{flag_select('🌐')}</select><label>URL API</label><input name=panel_url placeholder="https://node2.my.domain.ru:2053/panel-path"><label>Переменная окружения с API-токеном</label><input name=token_env placeholder=FOREIGN_2_XUI_TOKEN><label>Inbound ID через запятую</label><input name=inbound_ids placeholder=1,2,3><label>Вес при распределении</label><input type=number min=1 max=100 name=weight value=100><label>Маршруты</label><textarea name=routes placeholder="reality|1|vless|tcp&#10;xhttp|2|vless|xhttp"></textarea><label><input type=checkbox name=enabled value=1 checked> Включен</label><label><input type=checkbox name=accept_new value=1 checked> Выдавать новым пользователям</label><button class=btn>Добавить сервер</button></form></div>'''
    params=parse_qs(urlparse(self.path).query);notice='<div class=notice>Настройки сохранены и уже применены.</div>' if params.get('saved') else ''
    return self.sendx(200,page('Сервис и узлы',f'''<section class=hero><span class=eyebrow>Настройки · Сервис</span><h1>Сервис и VPN-узлы</h1><p>Оформление сайта и технические параметры серверов. Тарифы и оплата вынесены в отдельную понятную группу.</p><a class="btn soft" href=/admin/settings>← Все настройки</a></section>{notice}<div class=manual>{branding_form}</div><h2 id=servers>VPN-серверы</h2><div class=manual>{''.join(node_forms)}{new_node}</div>''',True))
   if p=='/admin/status':
@@ -1446,7 +1512,7 @@ class H(BaseHTTPRequestHandler):
   if p.startswith('/client-sub/'):
    email=subemail(p.rsplit('/',1)[-1])
    if not email:return self.sendx(404,'subscription not found','text/plain')
-   r=xapi('GET','/panel/api/clients/links/'+quote(email));links=r.get('obj') or []
+   r=api_for_email(email,'GET','/panel/api/clients/links/'+quote(email));links=r.get('obj') or []
    if not r.get('success') or not links:return self.sendx(404,'subscription not found','text/plain')
    payload=base64.b64encode(('\n'.join(links)).encode());self.send_response(200);self.send_header('Content-Type','text/plain; charset=utf-8');self.send_header('Profile-Title',BRAND_NAME);self.send_header('Profile-Update-Interval','12');self.send_header('Content-Length',str(len(payload)));self.end_headers();self.wfile.write(payload);return
   if p=='/api/bot/clients':
@@ -1675,7 +1741,7 @@ class H(BaseHTTPRequestHandler):
     current=0;old_limit=0
     if o['xui_email']:
      try:
-      client=(xapi('GET','/panel/api/clients/get/'+quote(o['xui_email'])).get('obj') or {}).get('client') or {};current=int(client.get('expiryTime') or 0);old_limit=int(client.get('limitIp') or 0)
+      client=(api_for_email(o['xui_email'],'GET','/panel/api/clients/get/'+quote(o['xui_email'])).get('obj') or {}).get('client') or {};current=int(client.get('expiryTime') or 0);old_limit=int(client.get('limitIp') or 0)
      except Exception:pass
     kind=o['order_kind'] or ('renew' if o['xui_email'] else 'new');projected=current if kind=='upgrade' else max(int(time.time()*1000),current)+plan[1]*86400000
     action='Изменение тарифа' if kind=='upgrade' else ('Продление подписки' if kind=='renew' else 'Новая подписка')
@@ -1762,6 +1828,7 @@ class H(BaseHTTPRequestHandler):
  def do_HEAD(self):return self.do_GET()
  def do_POST(self):
   p=urlparse(self.path).path
+  if self.bot_admin_proxy():return
   if self.limited('auth' if p in ('/login','/register','/2fa-login','/switch/user') or p==ADMIN_ENTRY else 'general'):return
   if int(self.headers.get('Content-Length','0') or 0)>1024*1024:return self.sendx(413,'Запрос слишком большой.','text/plain; charset=utf-8')
   d=self.data()
@@ -2226,9 +2293,9 @@ class H(BaseHTTPRequestHandler):
    updated=0
    for row in orders:
     try:
-     obj=xapi('GET','/panel/api/clients/get/'+quote(row['xui_email'])).get('obj') or {};client=obj.get('client') or {}
+     obj=api_for_email(row['xui_email'],'GET','/panel/api/clients/get/'+quote(row['xui_email'])).get('obj') or {};client=obj.get('client') or {}
      if client:
-      client['tgId']=tgid;r=xapi('POST','/panel/api/clients/update/'+quote(row['xui_email']),client_payload(client))
+      client['tgId']=tgid;r=api_for_email(row['xui_email'],'POST','/panel/api/clients/update/'+quote(row['xui_email']),client_payload(client))
       if r.get('success'):updated+=1
     except Exception:pass
    return self.jout(200,{'ok':True,'username':u['username'],'clients_updated':updated})
@@ -2237,8 +2304,8 @@ class H(BaseHTTPRequestHandler):
    tgid=int(d.get('telegram_id',0) or 0);proof=str(d.get('subscription','')).strip()
    match=next((x for x in panel_clients() if x.get('subId') and x['subId'] in proof),None)
    if not tgid or not match:return self.jout(404,{'error':'Подписка не найдена. Отправьте полную ссылку существующей подписки из программы VPN.'})
-   obj=xapi('GET','/panel/api/clients/get/'+quote(match['email'])).get('obj') or {};client=obj.get('client') or {};client['tgId']=tgid
-   r=xapi('POST','/panel/api/clients/update/'+quote(match['email']),client_payload(client))
+   obj=api_for_email(match['email'],'GET','/panel/api/clients/get/'+quote(match['email'])).get('obj') or {};client=obj.get('client') or {};client['tgId']=tgid
+   r=api_for_email(match['email'],'POST','/panel/api/clients/update/'+quote(match['email']),client_payload(client))
    if not r.get('success'):return self.jout(502,{'error':'Ошибка привязки подписки'})
    return self.jout(200,{'ok':True,'email':match['email'],'subscription_url':subscription_url(match['email'])})
   if p=='/api/bot/emergency-mtproto':
@@ -2281,9 +2348,9 @@ class H(BaseHTTPRequestHandler):
      claim=c.execute('SELECT order_id FROM trial_claims WHERE telegram_id=?',(tgid,)).fetchone()
     if claim and claim['order_id']!=o['id']:return self.jout(409,{'error':'Пробный период для этого Telegram-аккаунта уже использован'})
    if o['xui_email']:
-    obj=xapi('GET','/panel/api/clients/get/'+quote(o['xui_email'])).get('obj') or {};client=obj.get('client') or {}
+    obj=api_for_email(o['xui_email'],'GET','/panel/api/clients/get/'+quote(o['xui_email'])).get('obj') or {};client=obj.get('client') or {}
     if client:
-     client['tgId']=tgid;r=xapi('POST','/panel/api/clients/update/'+quote(o['xui_email']),client_payload(client))
+     client['tgId']=tgid;r=api_for_email(o['xui_email'],'POST','/panel/api/clients/update/'+quote(o['xui_email']),client_payload(client))
      if not r.get('success'):return self.jout(502,{'error':'Ошибка привязки подписки'})
    with db() as c:c.execute('UPDATE orders SET telegram_id=?,tg_username=?,customer=? WHERE id=?',(tgid,'@'+tgname if tgname else None,'@'+tgname if tgname else 'Telegram '+str(tgid),o['id']))
    o=expire_order(getorder(token))
@@ -2382,8 +2449,8 @@ class H(BaseHTTPRequestHandler):
     old=x.get('email','')
     if int(x.get('tgId') or 0)!=tgid or not old.startswith('shop-'):continue
     try:
-     obj=xapi('GET','/panel/api/clients/get/'+quote(old)).get('obj') or {};client=obj.get('client') or {};client['email']=login
-     r=xapi('POST','/panel/api/clients/update/'+quote(old),client_payload(client))
+     obj=api_for_email(old,'GET','/panel/api/clients/get/'+quote(old)).get('obj') or {};client=obj.get('client') or {};client['email']=login
+     r=api_for_email(old,'POST','/panel/api/clients/update/'+quote(old),client_payload(client))
      if r.get('success'):
       with db() as c:c.execute('UPDATE orders SET xui_email=? WHERE xui_email=?',(login,old))
       renamed+=1
@@ -2451,8 +2518,8 @@ class H(BaseHTTPRequestHandler):
    errors=[]
    for email in emails:
     try:
-     client=(xapi('GET','/panel/api/clients/get/'+quote(email)).get('obj') or {}).get('client') or {}
-     if client:client['enable']=not blocked;xapi('POST','/panel/api/clients/update/'+quote(email),client_payload(client))
+     client=(api_for_email(email,'GET','/panel/api/clients/get/'+quote(email)).get('obj') or {}).get('client') or {}
+     if client:client['enable']=not blocked;api_for_email(email,'POST','/panel/api/clients/update/'+quote(email),client_payload(client))
     except Exception as error:errors.append(str(error))
    record_admin_action(self.who(),user_id,None,'account_blocked' if blocked else 'account_unblocked',{'subscription_errors':errors})
    return self.redir('/admin/user?id='+str(user_id))
@@ -2478,8 +2545,8 @@ class H(BaseHTTPRequestHandler):
     c.execute('DELETE FROM user_recovery_codes WHERE user_id=?',(source_id,));c.execute('DELETE FROM auth_sessions WHERE username=?',(source['username'],));c.execute('DELETE FROM users WHERE id=?',(source_id,))
    for email in emails:
     try:
-     client=(xapi('GET','/panel/api/clients/get/'+quote(email)).get('obj') or {}).get('client') or {}
-     if client and target_tg:client['tgId']=target_tg;xapi('POST','/panel/api/clients/update/'+quote(email),client_payload(client))
+     client=(api_for_email(email,'GET','/panel/api/clients/get/'+quote(email)).get('obj') or {}).get('client') or {}
+     if client and target_tg:client['tgId']=target_tg;api_for_email(email,'POST','/panel/api/clients/update/'+quote(email),client_payload(client))
     except Exception:pass
    record_admin_action(self.who(),target_id,None,'accounts_merged',{'source':source['username'],'target':target['username']})
    return self.redir('/admin/user?id='+str(target_id))
@@ -2492,7 +2559,7 @@ class H(BaseHTTPRequestHandler):
   if p=='/admin/clients/clear-devices':
    if not self.isadmin():return self.sendx(403,'forbidden')
    email=str(d.get('email','')).strip();user_id=int(d.get('user_id',0) or 0)
-   try:xapi('POST','/panel/api/clients/clearIps/'+quote(email),{});xapi('DELETE','/panel/api/clients/hwids/'+quote(email))
+   try:api_for_email(email,'POST','/panel/api/clients/clearIps/'+quote(email),{});api_for_email(email,'DELETE','/panel/api/clients/hwids/'+quote(email))
    except Exception as error:return self.sendx(502,page('Ошибка',f'<div class="card box"><h2 class=err>Не удалось отвязать устройства</h2><p>{html.escape(str(error))}</p></div>',True))
    with db() as c:c.execute('DELETE FROM device_labels WHERE subscription=?',(email,))
    record_admin_action(self.who(),user_id,email,'all_devices_detached');return self.redir('/admin/user?id='+str(user_id))
@@ -2503,8 +2570,8 @@ class H(BaseHTTPRequestHandler):
    owned={x.get('email') for x in account_clients(u['id'],u['telegram_id']) if x.get('email')}
    if email not in owned:return self.sendx(403,'forbidden')
    try:
-    if kind=='hwid':xapi('DELETE','/panel/api/clients/hwids/'+quote(email)+'/'+quote(source),{})
-    elif kind=='ip':xapi('POST','/panel/api/clients/clearIps/'+quote(email),{})
+    if kind=='hwid':api_for_email(email,'DELETE','/panel/api/clients/hwids/'+quote(email)+'/'+quote(source),{})
+    elif kind=='ip':api_for_email(email,'POST','/panel/api/clients/clearIps/'+quote(email),{})
     else:return self.sendx(400,'bad device')
     with db() as c:c.execute('DELETE FROM device_labels WHERE subscription=? AND device_id=?',(email,kind+'-'+hashlib.sha256(source.encode()).hexdigest()[:16]))
    except Exception as error:return self.sendx(502,page('Ошибка',f'<div class="card box"><h2>Не удалось отключить устройство</h2><p>{html.escape(str(error))}</p><a class=btn href=/account>Вернуться</a></div>'))
@@ -2513,14 +2580,14 @@ class H(BaseHTTPRequestHandler):
    if not self.isadmin():return self.sendx(403,'forbidden')
    email=str(d.get('email','')).strip();kind=str(d.get('device_kind',''));source=str(d.get('device_source',''));user_id=int(d.get('user_id',0) or 0)
    try:
-    if kind=='hwid':xapi('DELETE','/panel/api/clients/hwids/'+quote(email)+'/'+quote(source))
-    else:xapi('POST','/panel/api/clients/clearIps/'+quote(email),{})
+    if kind=='hwid':api_for_email(email,'DELETE','/panel/api/clients/hwids/'+quote(email)+'/'+quote(source))
+    else:api_for_email(email,'POST','/panel/api/clients/clearIps/'+quote(email),{})
    except Exception as error:return self.sendx(502,str(error),'text/plain')
    record_admin_action(self.who(),user_id,email,'device_detached',{'kind':kind});return self.redir('/admin/user?id='+str(user_id))
   if p=='/admin/clients/limits':
    if not self.isadmin():return self.sendx(403,'forbidden')
    email=str(d.get('email','')).strip();user_id=int(d.get('user_id',0) or 0)
-   try:limit_ip=max(1,min(MAX_DEVICES,int(d.get('limit_ip',1))));traffic_gb=max(0,int(d.get('traffic_gb',0)));client=(xapi('GET','/panel/api/clients/get/'+quote(email)).get('obj') or {}).get('client') or {};client['limitIp']=limit_ip;client['totalGB']=traffic_gb*1024*1024*1024;result=xapi('POST','/panel/api/clients/update/'+quote(email),client_payload(client))
+   try:limit_ip=max(1,min(MAX_DEVICES,int(d.get('limit_ip',1))));traffic_gb=max(0,int(d.get('traffic_gb',0)));client=(api_for_email(email,'GET','/panel/api/clients/get/'+quote(email)).get('obj') or {}).get('client') or {};client['limitIp']=limit_ip;client['totalGB']=traffic_gb*1024*1024*1024;result=api_for_email(email,'POST','/panel/api/clients/update/'+quote(email),client_payload(client))
    except Exception as error:return self.sendx(502,str(error),'text/plain')
    if not result.get('success'):return self.sendx(502,str(result.get('msg') or 'update failed'),'text/plain')
    record_admin_action(self.who(),user_id,email,'subscription_limits_changed',{'devices':limit_ip,'traffic_gb':traffic_gb});return self.redir('/admin/user?id='+str(user_id))
@@ -2528,7 +2595,7 @@ class H(BaseHTTPRequestHandler):
    if not self.isadmin():return self.sendx(403,'forbidden')
    email=str(d.get('email','')).strip()
    if not email:return self.sendx(400,'bad subscription')
-   try:r=xapi('POST','/panel/api/clients/del/'+quote(email),{})
+   try:r=api_for_email(email,'POST','/panel/api/clients/del/'+quote(email),{})
    except Exception as e:return self.sendx(502,page('Ошибка удаления',f'<div class="card box"><h2 class=err>Не удалось связаться с 3x-ui</h2><p>{html.escape(str(e))}</p><a class="btn soft" href=/admin>Вернуться</a></div>'))
    if not r.get('success') and 'not found' not in str(r.get('msg','')).lower():return self.sendx(502,page('Ошибка удаления',f'<div class="card box"><h2 class=err>3x-ui не удалил подписку</h2><p>{html.escape(str(r.get("msg","Ошибка")))}</p><a class="btn soft" href=/admin>Вернуться</a></div>'))
    with db() as c:
@@ -2543,9 +2610,9 @@ class H(BaseHTTPRequestHandler):
    except:return self.sendx(400,'bad device limit')
    if not email or limit_ip not in range(1,MAX_DEVICES+1):return self.sendx(400,page('Ошибка', f'<div class="card box"><h2 class=err>Выберите от 1 до {MAX_DEVICES} устройств</h2><a class="btn soft" href=/admin>Вернуться</a></div>'))
    try:
-    obj=xapi('GET','/panel/api/clients/get/'+quote(email)).get('obj') or {};client=obj.get('client') or {}
+    obj=api_for_email(email,'GET','/panel/api/clients/get/'+quote(email)).get('obj') or {};client=obj.get('client') or {}
     if not client:return self.sendx(404,page('Не найдено','<div class="card box"><h2 class=err>Подписка не найдена в 3x-ui</h2><a class="btn soft" href=/admin>Вернуться</a></div>'))
-    client['limitIp']=limit_ip;r=xapi('POST','/panel/api/clients/update/'+quote(email),client_payload(client))
+    client['limitIp']=limit_ip;r=api_for_email(email,'POST','/panel/api/clients/update/'+quote(email),client_payload(client))
    except Exception as e:return self.sendx(502,page('Ошибка изменения',f'<div class="card box"><h2 class=err>Не удалось обновить 3x-ui</h2><p>{html.escape(str(e))}</p><a class="btn soft" href=/admin>Вернуться</a></div>'))
    if not r.get('success'):return self.sendx(502,page('Ошибка изменения',f'<div class="card box"><h2 class=err>3x-ui не применил изменение</h2><p>{html.escape(str(r.get("msg","Ошибка")))}</p><a class="btn soft" href=/admin>Вернуться</a></div>'))
    with db() as c:c.execute('DELETE FROM scheduled_changes WHERE email=? AND applied_at IS NULL',(email,))
@@ -2555,14 +2622,14 @@ class H(BaseHTTPRequestHandler):
    email=str(d.get('email','')).strip()
    if not email:return self.sendx(400,'bad subscription')
    try:
-    obj=xapi('GET','/panel/api/clients/get/'+quote(email)).get('obj') or {};client=obj.get('client') or {}
+    obj=api_for_email(email,'GET','/panel/api/clients/get/'+quote(email)).get('obj') or {};client=obj.get('client') or {}
     if not client:return self.sendx(404,'subscription not found')
     if p.endswith('/toggle'):client['enable']=str(d.get('enable','0'))=='1'
     else:
      days=int(d.get('days',0))
      if days not in range(1,3651):return self.sendx(400,'days must be 1..3650')
      now_ms=int(time.time()*1000);client['expiryTime']=max(now_ms,int(client.get('expiryTime') or 0))+days*86400000;client['enable']=True
-    r=xapi('POST','/panel/api/clients/update/'+quote(email),client_payload(client))
+    r=api_for_email(email,'POST','/panel/api/clients/update/'+quote(email),client_payload(client))
    except Exception as e:return self.sendx(502,page('Ошибка изменения',f'<div class="card box"><h2 class=err>Не удалось обновить 3x-ui</h2><p>{html.escape(str(e))}</p><a class="btn soft" href=/admin>Вернуться</a></div>',True))
    if not r.get('success'):return self.sendx(502,'3x-ui update failed')
    user_id=int(d.get('user_id',0) or 0)
@@ -2598,8 +2665,8 @@ class H(BaseHTTPRequestHandler):
     tgid=u['telegram_id'];emails=[x[0] for x in c.execute('SELECT DISTINCT xui_email FROM orders WHERE user_id=? AND xui_email IS NOT NULL',(uid,))]
    for email in emails:
     try:
-     obj=xapi('GET','/panel/api/clients/get/'+quote(email)).get('obj') or {};client=obj.get('client') or {}
-     if client:client['tgId']=0;xapi('POST','/panel/api/clients/update/'+quote(email),client_payload(client))
+     obj=api_for_email(email,'GET','/panel/api/clients/get/'+quote(email)).get('obj') or {};client=obj.get('client') or {}
+     if client:client['tgId']=0;api_for_email(email,'POST','/panel/api/clients/update/'+quote(email),client_payload(client))
     except Exception:pass
    with db() as c:
     c.execute('UPDATE users SET telegram_id=NULL,tg_username=NULL WHERE id=?',(uid,));c.execute('UPDATE orders SET telegram_id=NULL,tg_username=NULL WHERE user_id=?',(uid,))
@@ -2622,7 +2689,7 @@ class H(BaseHTTPRequestHandler):
    errors=[]
    for email in emails:
     try:
-     r=xapi('POST','/panel/api/clients/del/'+quote(email),{})
+     r=api_for_email(email,'POST','/panel/api/clients/del/'+quote(email),{})
      if not r.get('success') and 'not found' not in str(r.get('msg','')).lower():errors.append(email+': '+str(r.get('msg','ошибка 3x-ui')))
     except Exception as e:errors.append(email+': '+str(e))
    if errors:return self.sendx(502,page('Ошибка удаления',f'<div class="card box"><h2 class=err>Не все подключения удалены из 3x-ui</h2><p>{html.escape("; ".join(errors))}</p><p>Аккаунт на сайте сохранён. Исправьте ошибку и повторите.</p><a class="btn soft" href=/admin>Вернуться</a></div>'))
@@ -2702,7 +2769,12 @@ class H(BaseHTTPRequestHandler):
      if p.startswith('/api/'):return self.jout(409,{'error':'Для этой подписки уже есть незавершённое изменение или продление','order_id':unfinished['id'],'status':unfinished['status'],'pay_url':existing_url})
      return self.sendx(409,page('Есть незавершённый заказ',f'<div class="card box"><h2>Для этой подписки уже создан заказ</h2><p>Сначала завершите или отмените его. Новые отдельные подписки и заказы для других подписок можно оплачивать параллельно.</p><a class=btn href="{html.escape(existing_url)}">Открыть заказ №{unfinished["id"]}</a><a class="btn soft backbtn" href=/account>Мои подписки</a></div>'))
     created_at=int(time.time());expires_at=created_at+PAYMENT_WINDOW
-    assigned=choose_node();cur=c.execute('INSERT INTO orders(token,plan,amount,customer,telegram_id,created_at,expires_at,user_id,email,tg_username,xui_email,order_kind,target_email,plan_name,plan_days,plan_devices,plan_traffic_gb,base_amount,discount_amount,promo_code,assigned_node,plan_trial) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(t,plan,amount,customer,int(tg) if tg else None,created_at,expires_at,uid,email or None,tgname or None,target,action,target,plan_values[0],plan_values[1],new_limit,plan_values[4],base_amount,discount,promo,assigned,1 if tariff['trial'] else 0))
+    assigned=str(target_client.get('_node_id') or '') if target else choose_node(c)
+    if not assigned:
+     message='Нет доступных VPN-нод: все узлы offline, в maintenance или не принимают новых пользователей'
+     if p.startswith('/api/'):return self.jout(503,{'error':message,'code':'no_vpn_nodes_available'})
+     return self.sendx(503,page('Сервис временно недоступен',f'<div class="card box"><h2 class=err>Сейчас нет доступных VPN-серверов</h2><p>{message}. Заказ не создан — попробуйте позже.</p><a class="btn soft" href=/#tariffs>Вернуться</a></div>'))
+    cur=c.execute('INSERT INTO orders(token,plan,amount,customer,telegram_id,created_at,expires_at,user_id,email,tg_username,xui_email,order_kind,target_email,plan_name,plan_days,plan_devices,plan_traffic_gb,base_amount,discount_amount,promo_code,assigned_node,plan_trial) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(t,plan,amount,customer,int(tg) if tg else None,created_at,expires_at,uid,email or None,tgname or None,target,action,target,plan_values[0],plan_values[1],new_limit,plan_values[4],base_amount,discount,promo,assigned,1 if tariff['trial'] else 0))
    x={'id':cur.lastrowid,'token':t,'pay_url':PUBLIC+'/pay/'+t,'payment_url':PUBLIC+'/pay/'+t+'/start','payment_method':payment_mode(),'qr_url':PUBLIC+'/qr/'+t+'.png','payment_reference':payment_reference(cur.lastrowid),'expires_at':expires_at,'amount':amount,'currency':CURRENCY,'traffic_gb':plan_values[4],'action':action,'subscription':target,'current_expiry':current_expiry,'projected_expiry':projected,'effective_at':effective_at,'link_unchanged':bool(target),'old_limit_ip':current_limit,'new_limit_ip':new_limit,'days':plan_values[1],'remaining_days':remaining_days};return self.jout(201,x) if p.startswith('/api/') else self.redir('/cart' if d.get('destination')=='cart' else x['pay_url'])
   if p.startswith('/pay/') and p.endswith('/cancel'):
    if not self.need():return

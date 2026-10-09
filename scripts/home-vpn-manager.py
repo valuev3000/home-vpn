@@ -10,6 +10,9 @@ import shutil
 import subprocess
 import sys
 
+from home_vpn_config import PROJECT_VERSION
+from home_vpn_installer import install_component_files, remove_owned_component
+
 def source_root():
     if os.environ.get("HOME_VPN_SOURCE_ROOT"):
         return pathlib.Path(os.environ["HOME_VPN_SOURCE_ROOT"])
@@ -20,7 +23,7 @@ def source_root():
 
 
 ROOT = source_root()
-VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip() if (ROOT / "VERSION").exists() else "0.0.4-pre"
+VERSION = PROJECT_VERSION
 COMPONENTS = ("site", "bot", "domain", "xui", "placeholder", "mail")
 LABELS = {"site":"Сайт и API", "bot":"Telegram-бот и панель", "domain":"Домен и TLS", "xui":"VLESS inbound в 3x-ui",
           "placeholder":"Сайт-заглушка", "mail":"SMTP/IMAP"}
@@ -64,8 +67,11 @@ def ensure_source():
 
 
 def install_placeholder():
-    ensure_source(); title=ask("Название заглушки", "Домашняя приватная сеть"); main_url=ask("Ссылка на основной сайт", "https://my.domain.ru")
-    port=ask("Локальный порт заглушки", "8181")
+    ensure_source()
+    if installed()["site"]:
+        raise SystemExit("На управляющей ноде с сайтом HOME-VPN заглушка запрещена")
+    title=os.getenv("HOME_VPN_PLACEHOLDER_TITLE") or ask("Название заглушки", "Домашняя приватная сеть"); main_url=os.getenv("HOME_VPN_PLACEHOLDER_URL") or ask("Ссылка на основной сайт", "https://my.domain.ru")
+    port=os.getenv("HOME_VPN_PLACEHOLDER_PORT") or ask("Локальный порт заглушки", "8181")
     if not port.isdigit(): raise SystemExit("Порт должен быть числом")
     pathlib.Path("/opt/home-vpn-placeholder").mkdir(parents=True, exist_ok=True); pathlib.Path("/etc/home-vpn").mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT/"scripts/home-vpn-placeholder.py", "/opt/home-vpn-placeholder/server.py")
@@ -95,33 +101,23 @@ def install_component(name):
 def update_site():
     ensure_source()
     if not installed()["site"]: raise RuntimeError("Сайт ещё не установлен")
-    shutil.copy2(ROOT/"vpn-shop/app.py","/opt/vpn-shop/app.py");shutil.copy2(ROOT/"vpn-shop/vpn-shop.service","/etc/systemd/system/vpn-shop.service")
-    pathlib.Path("/srv/home-vpn/assets").mkdir(parents=True,exist_ok=True)
-    for item in (ROOT/"vpn-shop/static/original").glob("*"):shutil.copy2(item,pathlib.Path("/srv/home-vpn/assets")/item.name)
-    for source,target,mode in (("home-vpn-healthcheck.sh","/usr/local/sbin/home-vpn-healthcheck",0o700),("home-vpn-system-check.py","/usr/local/sbin/home-vpn-system-check",0o700)):
-        shutil.copy2(ROOT/"scripts"/source,target);os.chmod(target,mode)
-    if pathlib.Path("/usr/local/bin/kit").exists():
-        shutil.copy2(ROOT/"scripts/home-vpn-kit-backup","/usr/local/sbin/home-vpn-kit-backup");os.chmod("/usr/local/sbin/home-vpn-kit-backup",0o700)
-        shutil.copy2(ROOT/"scripts/home-vpn-kit-backup.service","/etc/systemd/system/home-vpn-kit-backup.service")
-        shutil.copy2(ROOT/"scripts/home-vpn-kit-backup.timer","/etc/systemd/system/home-vpn-kit-backup.timer")
-    run("systemctl","daemon-reload");run("systemctl","restart","vpn-shop")
+    install_component_files("site",ROOT)
+    run("systemctl","daemon-reload");run("systemctl","restart","vpn-shop");run("systemctl","enable","--now","home-vpn-site-backup.timer")
     if pathlib.Path("/usr/local/bin/kit").exists():run("systemctl","enable","--now","home-vpn-kit-backup.timer")
 
 
 def update_bot():
     ensure_source()
     if not installed()["bot"]: raise RuntimeError("Бот ещё не установлен")
-    for source,target,mode in ((ROOT/"vpn-bot/bot.py",pathlib.Path("/opt/vpn-bot/bot.py"),0o755),(ROOT/"vpn-bot/admin.py",pathlib.Path("/opt/vpn-bot/admin.py"),0o755),(ROOT/"vpn-bot/admin-control.py",pathlib.Path("/usr/local/sbin/vpn-bot-admin-control"),0o700)):
-        shutil.copy2(source,target);os.chmod(target,mode)
-    shutil.copytree(ROOT/"vpn-bot/assets",pathlib.Path("/opt/vpn-bot/assets"),dirs_exist_ok=True)
-    shutil.copy2(ROOT/"vpn-bot/vpn-bot.service","/etc/systemd/system/vpn-bot.service");shutil.copy2(ROOT/"vpn-bot/vpn-bot-admin.service","/etc/systemd/system/vpn-bot-admin.service")
-    run("systemctl","daemon-reload");run("systemctl","restart","vpn-bot","vpn-bot-admin")
+    install_component_files("bot",ROOT)
+    run("systemctl","daemon-reload");run("systemctl","restart","vpn-bot","vpn-bot-admin");run("systemctl","enable","--now","home-vpn-bot-backup.timer")
 
 
 def update_component(name):
     if name=="site": update_site()
     elif name=="bot": update_bot()
     elif name=="placeholder":
+        if installed()["site"]:raise RuntimeError("На управляющей ноде должен работать сайт HOME-VPN, а не заглушка")
         if not installed()["placeholder"]: raise RuntimeError("Заглушка ещё не установлена")
         shutil.copy2(ROOT/"scripts/home-vpn-placeholder.py","/opt/home-vpn-placeholder/server.py");run("systemctl","restart","home-vpn-placeholder")
     elif name in ("domain","xui"): install_component(name)
@@ -142,6 +138,9 @@ def publish_manager():
     pathlib.Path("/etc/home-vpn").mkdir(parents=True,exist_ok=True)
     pathlib.Path("/etc/home-vpn/source-root").write_text(str(ROOT.resolve())+"\n",encoding="utf-8");os.chmod("/etc/home-vpn/source-root",0o644)
     shutil.copy2(ROOT/"scripts/home-vpn-manager.py","/usr/local/sbin/home-vpn-manager");os.chmod("/usr/local/sbin/home-vpn-manager",0o750)
+    shutil.copy2(ROOT/"scripts/home_vpn_config.py","/usr/local/sbin/home_vpn_config.py");os.chmod("/usr/local/sbin/home_vpn_config.py",0o644)
+    shutil.copy2(ROOT/"scripts/home_vpn_installer.py","/usr/local/sbin/home_vpn_installer.py");os.chmod("/usr/local/sbin/home_vpn_installer.py",0o644)
+    pathlib.Path("/usr/local/share/home-vpn").mkdir(parents=True,exist_ok=True);shutil.copy2(ROOT/"config/component-manifests.json","/usr/local/share/home-vpn/component-manifests.json")
     shutil.copy2(ROOT/"scripts/home-vpn-xui.py","/usr/local/sbin/home-vpn-xui");os.chmod("/usr/local/sbin/home-vpn-xui",0o750)
 
 
@@ -153,22 +152,11 @@ def remove_files(paths):
 
 
 def remove_component(name,purge=False):
-    if name=="site":
-        units=("vpn-shop","home-vpn-kit-backup.timer","home-vpn-healthcheck.timer","home-vpn-system-check.timer")
-        for unit in units:run("systemctl","disable","--now",unit,check=False)
-        remove_files(["/opt/vpn-shop","/etc/systemd/system/vpn-shop.service","/usr/local/sbin/home-vpn-kit-backup","/usr/local/sbin/home-vpn-healthcheck","/usr/local/sbin/home-vpn-system-check"]+[f"/etc/systemd/system/{x}" for x in ("home-vpn-kit-backup.service","home-vpn-kit-backup.timer","home-vpn-healthcheck.service","home-vpn-healthcheck.timer","home-vpn-system-check.service","home-vpn-system-check.timer")])
-        if purge:remove_files(["/var/lib/vpn-shop","/etc/vpn-shop.env","/etc/home-vpn"])
-    elif name=="bot":
-        for unit in ("vpn-bot","vpn-bot-admin"):run("systemctl","disable","--now",unit,check=False)
-        remove_files(["/opt/vpn-bot","/etc/systemd/system/vpn-bot.service","/etc/systemd/system/vpn-bot-admin.service","/etc/sudoers.d/vpn-bot-admin","/usr/local/sbin/vpn-bot-admin-control"])
-        if purge:remove_files(["/var/lib/vpn-bot","/etc/vpn-bot.env","/etc/vpn-bot-admin.env","/etc/vpn-bot-menu.json"])
-    elif name=="placeholder":
-        run("systemctl","disable","--now","home-vpn-placeholder",check=False);remove_files(["/opt/home-vpn-placeholder","/etc/systemd/system/home-vpn-placeholder.service","/etc/home-vpn-placeholder.env"])
-        if purge:remove_files(["/etc/home-vpn/placeholder.html"])
+    if name in ("site","bot","placeholder"):
+        remove_owned_component(name,purge)
     elif name=="mail":
         print("Почтовые пакеты и пользователь не удаляются автоматически, чтобы не потерять чужую почту.")
-        remove_files(["/etc/dovecot/conf.d/99-home-vpn.conf","/etc/fail2ban/jail.d/home-vpn-mail.local","/etc/systemd/system/postfix.service.d/lxc.conf","/etc/systemd/system/dovecot.service.d/lxc.conf"])
-        if purge:remove_files(["/etc/home-vpn-mail","/root/home-vpn-mail-credentials.txt"])
+        remove_owned_component(name,purge)
     elif name in ("domain","xui"):
         print("TLS и 3x-ui не удаляются менеджером: они могут обслуживать другие сервисы. Удалите только созданный inbound вручную в 3x-ui.")
     run("systemctl","daemon-reload",check=False)

@@ -7,10 +7,13 @@ the repository configuration file.
 import argparse, getpass, grp, json, os, pathlib, secrets, shutil, ssl, subprocess, sys, tempfile, urllib.request
 from urllib.parse import urlparse
 
+from home_vpn_config import ENV_SCHEMAS, PROJECT_VERSION, default_config, merge_env, validate_project_config
+from home_vpn_installer import install_component_files
+
 ROOT=pathlib.Path(__file__).resolve().parents[1]
-DEFAULT_CONFIG=ROOT/'config/config.example.json'
-if not DEFAULT_CONFIG.exists():DEFAULT_CONFIG=pathlib.Path('/usr/local/share/home-vpn/config.example.json')
 SYSTEM_CONFIG=pathlib.Path('/etc/home-vpn/config.json')
+INSTALL_ANSWERS={}
+NON_INTERACTIVE=False
 
 def ask(prompt,default=None,secret=False):
     suffix=f' [{default}]' if default not in (None,'') else ''
@@ -21,9 +24,14 @@ def yes(prompt,default=True):
     value=ask(prompt,'Y/n' if default else 'y/N').lower()
     return value in ('y','yes','д','да') if value not in ('y/n','y/N') else default
 
+def install_answer(key,prompt,default='',secret=False):
+    if key in INSTALL_ANSWERS:return str(INSTALL_ANSWERS[key])
+    if NON_INTERACTIVE:return str(default or '')
+    return ask(prompt,default,secret)
+
 def load(path):
-    source=path if path.exists() else DEFAULT_CONFIG
-    with source.open(encoding='utf-8') as stream:return json.load(stream)
+    if not path.exists():return default_config()
+    with path.open(encoding='utf-8') as stream:return json.load(stream)
 
 def save(path,data):
     path.parent.mkdir(parents=True,exist_ok=True)
@@ -38,24 +46,7 @@ def save(path,data):
         if os.path.exists(tmp):os.unlink(tmp)
 
 def validate(data):
-    errors=[];branding=data.get('branding') or {};pricing=data.get('pricing') or {};devices=pricing.get('device_monthly') or {};nodes=data.get('nodes') or []
-    if not str(branding.get('name') or '').strip():errors.append('branding.name is required')
-    if not devices:errors.append('pricing.device_monthly is empty')
-    for key,value in devices.items():
-        if not str(key).isdigit() or int(key)<1 or int(value)<0:errors.append(f'invalid device price: {key}={value}')
-    if int(pricing.get('traffic_gb',0))<0:errors.append('traffic_gb must be 0 or greater')
-    if not nodes:errors.append('at least one node is required')
-    if sum(1 for node in nodes if node.get('primary'))!=1:errors.append('exactly one primary node is required')
-    ids=set()
-    for node in nodes:
-        node_id=str(node.get('id',''))
-        if not node_id or node_id in ids:errors.append(f'invalid or duplicate node id: {node_id}')
-        ids.add(node_id)
-        if not node.get('name'):errors.append(f'node {node_id} has no name')
-        if node.get('primary') and (not node.get('panel_url') or not node.get('inbound_ids')):errors.append('primary node needs panel_url and inbound_ids')
-        for route in node.get('routes') or []:
-            if not route.get('name') or not isinstance(route.get('inbound_id'),int):errors.append(f'node {node_id} has invalid route')
-    return errors
+    return validate_project_config(data)
 
 def branding_wizard(data):
     branding=data.setdefault('branding',{})
@@ -145,9 +136,11 @@ def configure(path):
 
 def run(*args,check=True):return subprocess.run(args,check=check)
 
-def write_env(path,values):
-    path.parent.mkdir(parents=True,exist_ok=True)
-    path.write_text(''.join(f'{key}={value}\n' for key,value in values.items()),encoding='utf-8');path.chmod(0o600)
+def write_env(path,values,overwrite_secrets=False):
+    component='site' if path.name=='vpn-shop.env' else 'bot_admin' if path.name=='vpn-bot-admin.env' else 'bot'
+    protected=set(ENV_SCHEMAS[component]['secret'])
+    if component=='site':protected.update(key for key in values if key=='XUI_TOKEN' or key.endswith('_XUI_TOKEN'))
+    merge_env(path,values,component=component,preserve_secrets=protected,overwrite_secrets=overwrite_secrets,mode=0o600)
 
 def read_env(path):
     result={}
@@ -173,6 +166,32 @@ def install_tls_copy(cert,key):
     for path in (cert_target,key_target):os.chown(path,0,group);os.chmod(path,0o640)
     return str(cert_target),str(key_target)
 
+def install_reverse_proxy(public,cert='',key=''):
+    parsed=urlparse(public);port=parsed.port or (443 if parsed.scheme=='https' else 80);host=parsed.hostname
+    if parsed.scheme=='https' and not (cert and key):raise SystemExit('Для TLS reverse proxy нужны сертификат и ключ')
+    run('apt-get','install','-y','nginx')
+    tls=''
+    if parsed.scheme=='https':
+        cert,key=install_tls_copy(cert,key);tls=f'\n    ssl_certificate {cert};\n    ssl_certificate_key {key};\n    ssl_protocols TLSv1.2 TLSv1.3;'
+    config=f'''server {{
+    listen {port}{' ssl' if parsed.scheme=='https' else ''};
+    server_name {host};{tls}
+    client_max_body_size 1m;
+    location / {{
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }}
+}}
+'''
+    target=pathlib.Path('/etc/nginx/sites-available/home-vpn.conf');target.write_text(config,encoding='utf-8');os.chmod(target,0o644)
+    link=pathlib.Path('/etc/nginx/sites-enabled/home-vpn.conf')
+    if not link.exists():link.symlink_to(target)
+    run('nginx','-t');run('systemctl','enable','--now','nginx');run('systemctl','reload','nginx')
+
 def install(config_path):
     if os.geteuid()!=0:raise SystemExit('Запустите установку через sudo')
     if not config_path.exists():configure(config_path)
@@ -186,64 +205,55 @@ def install(config_path):
     run('useradd','--system','--home','/var/lib/vpn-shop','--shell','/usr/sbin/nologin','vpnshop',check=False)
     run('chown','root:vpnshop',str(config_path.parent),str(config_path));run('chmod','770',str(config_path.parent));run('chmod','660',str(config_path))
     pathlib.Path('/opt/vpn-shop').mkdir(parents=True,exist_ok=True);pathlib.Path('/srv/home-vpn/assets').mkdir(parents=True,exist_ok=True);pathlib.Path('/var/lib/vpn-shop').mkdir(parents=True,exist_ok=True)
-    shutil.copy2(ROOT/'vpn-shop/app.py','/opt/vpn-shop/app.py')
-    for item in (ROOT/'vpn-shop/static/original').glob('*'):shutil.copy2(item,pathlib.Path('/srv/home-vpn/assets')/item.name)
-    shutil.copy2(ROOT/'vpn-shop/vpn-shop.service','/etc/systemd/system/vpn-shop.service')
-    service_files=('home-vpn-healthcheck.service','home-vpn-healthcheck.timer','home-vpn-system-check.service','home-vpn-system-check.timer')
-    shutil.copy2(ROOT/'scripts/home-vpn-healthcheck.sh','/usr/local/sbin/home-vpn-healthcheck');os.chmod('/usr/local/sbin/home-vpn-healthcheck',0o700)
-    shutil.copy2(ROOT/'scripts/home-vpn-system-check.py','/usr/local/sbin/home-vpn-system-check');os.chmod('/usr/local/sbin/home-vpn-system-check',0o700)
-    for service_file in service_files:shutil.copy2(ROOT/'scripts'/service_file,pathlib.Path('/etc/systemd/system')/service_file)
-    if pathlib.Path('/usr/local/bin/kit').exists():
-        shutil.copy2(ROOT/'scripts/home-vpn-kit-backup','/usr/local/sbin/home-vpn-kit-backup');os.chmod('/usr/local/sbin/home-vpn-kit-backup',0o700)
-        for service_file in ('home-vpn-kit-backup.service','home-vpn-kit-backup.timer'):shutil.copy2(ROOT/'scripts'/service_file,pathlib.Path('/etc/systemd/system')/service_file)
-    pathlib.Path('/usr/local/share/home-vpn').mkdir(parents=True,exist_ok=True);shutil.copy2(ROOT/'config/config.example.json','/usr/local/share/home-vpn/config.example.json')
-    shutil.copy2(__file__,'/usr/local/sbin/home-vpn-setup');os.chmod('/usr/local/sbin/home-vpn-setup',0o750)
-    public=ask('Публичный домен или URL сайта','https://vpn.my.domain.ru');public=public if '://' in public else 'https://'+public;public=public.rstrip('/');parsed=urlparse(public);public_port=parsed.port or (443 if parsed.scheme=='https' else 80)
+    install_component_files('site',ROOT);shutil.copy2(__file__,'/usr/local/sbin/home-vpn-setup');os.chmod('/usr/local/sbin/home-vpn-setup',0o750)
+    public=install_answer('public_url','Публичный домен или URL сайта','https://vpn.my.domain.ru');public=public if '://' in public else 'https://'+public;public=public.rstrip('/');parsed=urlparse(public);public_port=parsed.port or (443 if parsed.scheme=='https' else 80)
     detected=next(((cert,key) for cert,key in tls_candidates() if pathlib.Path(cert).is_file() and pathlib.Path(key).is_file()),('',''))
     cert=key=''
     if parsed.scheme=='https':
-        cert=ask('TLS-сертификат для сайта',detected[0]);key=ask('TLS-ключ для сайта',detected[1]) if cert else ''
+        cert=install_answer('tls_cert','TLS-сертификат для сайта',detected[0]);key=install_answer('tls_key','TLS-ключ для сайта',detected[1]) if cert else ''
         if cert and (not pathlib.Path(cert).is_file() or not pathlib.Path(key).is_file()):raise SystemExit('TLS-сертификат или ключ не найден')
     occupied=listener_on(public_port)
     direct=not occupied and (parsed.scheme!='https' or bool(cert and key))
-    if direct:print(f'Порт {public_port} свободен: сайт будет опубликован напрямую, Nginx не нужен.')
+    if direct:print(f'Порт {public_port} свободен: будет настроен TLS reverse proxy на loopback-приложение.')
     else:
         reason=f'порт {public_port} уже занят: {occupied}' if occupied else 'для HTTPS не указан сертификат и ключ'
-        print('Обнаружен внешний вход ('+reason+'). Сайт останется на 127.0.0.1:8080; настройте уже установленный прокси на этот адрес. Nginx проект не устанавливает.')
-    admin_user=ask('Логин администратора','home-admin');admin_password=ask('Пароль администратора',secrets.token_urlsafe(16),True)
+        print('Обнаружен внешний вход ('+reason+'). Сайт останется на 127.0.0.1:8080; topology installer проверит Xray fallback.')
+    admin_user=install_answer('admin_user','Логин администратора','home-admin');admin_password=install_answer('admin_password','Пароль администратора',secrets.token_urlsafe(16),True)
     bot_mode=os.getenv('HOME_VPN_INSTALL_BOT','ask').lower()
-    telegram_token='' if bot_mode in ('0','no','false') else ask('Telegram Bot Token (пусто = не устанавливать бота)','',True)
-    telegram_admin_id=ask('Telegram ID администратора бота','0') if telegram_token else '0'
+    telegram_token='' if bot_mode in ('0','no','false') else install_answer('telegram_token','Telegram Bot Token (пусто = не устанавливать бота)','',True)
+    telegram_admin_id=install_answer('telegram_admin_id','Telegram ID администратора бота','0') if telegram_token else '0'
     if telegram_admin_id and not telegram_admin_id.isdigit():raise SystemExit('Telegram ID администратора должен состоять только из цифр')
-    telegram_bot_name=ask('Имя Telegram-бота без @','your_bot') if telegram_token else 'your_bot'
-    telegram_channel=ask('Telegram-канал, например @my_channel (необязательно)','') if telegram_token else ''
-    bot_admin_url=ask('URL отдельной панели управления ботом (необязательно)','') if telegram_token else ''
-    bot_panel_user=ask('Логин отдельной панели бота','bot-admin') if telegram_token else ''
-    bot_panel_password=ask('Пароль отдельной панели бота (пусто = сгенерировать)','',True) if telegram_token else ''
+    telegram_bot_name=install_answer('telegram_bot_name','Имя Telegram-бота без @','your_bot') if telegram_token else 'your_bot'
+    telegram_channel=install_answer('telegram_channel','Telegram-канал, например @my_channel (необязательно)','') if telegram_token else ''
+    telegram_proxy_url=install_answer('telegram_proxy_url','Loopback HTTP-прокси health-aware Telegram egress','http://127.0.0.1:18080') if telegram_token else ''
+    if telegram_token and urlparse(telegram_proxy_url).hostname not in ('127.0.0.1','::1','localhost'):raise SystemExit('Telegram egress должен слушать loopback; прямой обход запрещён')
+    bot_admin_url=install_answer('bot_admin_url','URL отдельной панели управления ботом (необязательно)','') if telegram_token else ''
+    bot_panel_user=install_answer('bot_panel_user','Логин отдельной панели бота','bot-admin') if telegram_token else ''
+    bot_panel_password=install_answer('bot_panel_password','Пароль отдельной панели бота (пусто = сгенерировать)','',True) if telegram_token else ''
     if telegram_token and not bot_panel_password:bot_panel_password=secrets.token_urlsafe(16)
     bot_panel_entry='/bot-'+secrets.token_urlsafe(8) if telegram_token else ''
-    smtp_host=ask('SMTP-сервер для писем (пусто = почтовая регистрация отключена)','')
-    smtp_port=ask('SMTP-порт','587') if smtp_host else '587'
+    if telegram_token:bot_admin_url=(bot_admin_url.rstrip('/') if bot_admin_url else public)+bot_panel_entry
+    smtp_host=install_answer('smtp_host','SMTP-сервер для писем (пусто = почтовая регистрация отключена)','')
+    smtp_port=install_answer('smtp_port','SMTP-порт','587') if smtp_host else '587'
     if smtp_host and not smtp_port.isdigit():raise SystemExit('SMTP-порт должен быть числом')
-    mail_from=ask('Адрес отправителя','support@my.domain.ru') if smtp_host else 'support@my.domain.ru'
-    smtp_user=ask('SMTP-логин',mail_from) if smtp_host else ''
-    smtp_password=ask('SMTP-пароль приложения','',True) if smtp_host else ''
+    mail_from=install_answer('mail_from','Адрес отправителя','support@my.domain.ru') if smtp_host else 'support@my.domain.ru'
+    smtp_user=install_answer('smtp_user','SMTP-логин',mail_from) if smtp_host else ''
+    smtp_password=install_answer('smtp_password','SMTP-пароль приложения','',True) if smtp_host else ''
     smtp_ssl='1' if smtp_host and smtp_port=='465' else '0';smtp_starttls='1' if smtp_host and smtp_port!='465' else '0'
-    imap_host=ask('IMAP-сервер для входящих писем','') if smtp_host else ''
-    imap_port=ask('IMAP-порт','993') if imap_host else '993'
+    imap_host=install_answer('imap_host','IMAP-сервер для входящих писем','') if smtp_host else ''
+    imap_port=install_answer('imap_port','IMAP-порт','993') if imap_host else '993'
     if imap_host and not imap_port.isdigit():raise SystemExit('IMAP-порт должен быть числом')
-    imap_user=ask('IMAP-логин',smtp_user) if imap_host else ''
-    imap_password=ask('IMAP-пароль приложения (пусто = как SMTP)','',True) if imap_host else ''
-    payment=data.setdefault('payment',{});payment_mode=ask('Оплата: manual или yookassa',payment.get('mode','manual')).lower()
+    imap_user=install_answer('imap_user','IMAP-логин',smtp_user) if imap_host else ''
+    imap_password=install_answer('imap_password','IMAP-пароль приложения (пусто = как SMTP)','',True) if imap_host else ''
+    payment=data.setdefault('payment',{});payment_mode=install_answer('payment_mode','Оплата: manual или yookassa',payment.get('mode','manual')).lower()
     if payment_mode not in ('manual','yookassa'):raise SystemExit('Допустимо только manual или yookassa')
-    payment['mode']=payment_mode;yookassa_shop_id=ask('ЮKassa Shop ID','') if payment_mode=='yookassa' else '';yookassa_secret=ask('ЮKassa секретный ключ','',True) if payment_mode=='yookassa' else ''
+    payment['mode']=payment_mode;yookassa_shop_id=install_answer('yookassa_shop_id','ЮKassa Shop ID','') if payment_mode=='yookassa' else '';yookassa_secret=install_answer('yookassa_secret','ЮKassa секретный ключ','',True) if payment_mode=='yookassa' else ''
     if payment_mode=='yookassa' and (not yookassa_shop_id or not yookassa_secret):raise SystemExit('Для автоматической оплаты нужны Shop ID и секретный ключ ЮKassa')
     api_secret=secrets.token_urlsafe(48);admin_entry='/admin-'+secrets.token_urlsafe(8)
-    env={'VPN_SHOP_DB':'/var/lib/vpn-shop/shop.db','HOME_VPN_CONFIG':str(config_path),'APP_ENV':'production','PUBLIC_URL':public,'APP_BIND':'0.0.0.0' if direct else '127.0.0.1','APP_PORT':str(public_port if direct else 8080),'TRUST_PROXY':'0' if direct else '1','SESSION_SECRET':secrets.token_urlsafe(48),'API_SECRET':api_secret,'MAIL_SETTINGS_KEY':secrets.token_urlsafe(48),'ADMIN_USER':admin_user,'ADMIN_PASSWORD':admin_password,'ADMIN_ENTRY_PATH':admin_entry,'TELEGRAM_ADMIN_ID':telegram_admin_id or '0','TELEGRAM_BOT_URL':'https://t.me/'+telegram_bot_name.lstrip('@'),'BOT_ADMIN_URL':bot_admin_url,'SMTP_HOST':smtp_host,'SMTP_PORT':smtp_port,'SMTP_USERNAME':smtp_user,'SMTP_PASSWORD':smtp_password,'SMTP_STARTTLS':smtp_starttls,'SMTP_SSL':smtp_ssl,'IMAP_HOST':imap_host,'IMAP_PORT':imap_port,'IMAP_USERNAME':imap_user,'IMAP_PASSWORD':imap_password or smtp_password,'IMAP_SSL':'1','MAIL_FROM':mail_from,'MAIL_REPLY_TO':mail_from,'PAYMENT_URL':'','YOOKASSA_SHOP_ID':yookassa_shop_id,'YOOKASSA_SECRET_KEY':yookassa_secret,'YOOKASSA_API_URL':'https://api.yookassa.ru/v3','YOOKASSA_RETURN_URL':''}
-    if direct and cert and key:env['TLS_CERT'],env['TLS_KEY']=install_tls_copy(cert,key)
+    env={'VPN_SHOP_DB':'/var/lib/vpn-shop/shop.db','HOME_VPN_CONFIG':str(config_path),'APP_ENV':'production','PUBLIC_URL':public,'APP_BIND':'127.0.0.1','APP_PORT':'8080','TRUST_PROXY':'1','SESSION_SECRET':secrets.token_urlsafe(48),'API_SECRET':api_secret,'MAIL_SETTINGS_KEY':secrets.token_urlsafe(48),'ADMIN_USER':admin_user,'ADMIN_PASSWORD':admin_password,'ADMIN_ENTRY_PATH':admin_entry,'TELEGRAM_ADMIN_ID':telegram_admin_id or '0','TELEGRAM_BOT_URL':'https://t.me/'+telegram_bot_name.lstrip('@'),'BOT_ADMIN_URL':bot_admin_url,'SMTP_HOST':smtp_host,'SMTP_PORT':smtp_port,'SMTP_USERNAME':smtp_user,'SMTP_PASSWORD':smtp_password,'SMTP_STARTTLS':smtp_starttls,'SMTP_SSL':smtp_ssl,'IMAP_HOST':imap_host,'IMAP_PORT':imap_port,'IMAP_USERNAME':imap_user,'IMAP_PASSWORD':imap_password or smtp_password,'IMAP_SSL':'1','MAIL_FROM':mail_from,'MAIL_REPLY_TO':mail_from,'PAYMENT_URL':'','YOOKASSA_SHOP_ID':yookassa_shop_id,'YOOKASSA_SECRET_KEY':yookassa_secret,'YOOKASSA_API_URL':'https://api.yookassa.ru/v3','YOOKASSA_RETURN_URL':''}
     for node in data.get('nodes') or []:
         token_name=str(node.get('token_env') or ('XUI_TOKEN' if node.get('primary') else str(node.get('id','NODE')).upper().replace('-','_')+'_XUI_TOKEN'))
-        node['token_env']=token_name;token=ask(f"API-токен 3x-ui: {node.get('name') or node.get('id')}",'',True);env[token_name]=token
+        node['token_env']=token_name;token=str((INSTALL_ANSWERS.get('node_tokens') or {}).get(str(node.get('id')),'')) if NON_INTERACTIVE else ask(f"API-токен 3x-ui: {node.get('name') or node.get('id')}",'',True);env[token_name]=token
         if token and node.get('panel_url'):
             try:
                 routes=discover_node(node,token)
@@ -253,24 +263,21 @@ def install(config_path):
             except Exception as error:print(f"Предупреждение: не удалось получить данные {node.get('name')}: {error}")
     save(config_path,data)
     write_env(pathlib.Path('/etc/vpn-shop.env'),env);run('chown','-R','vpnshop:vpnshop','/var/lib/vpn-shop','/opt/vpn-shop')
+    if direct:install_reverse_proxy(public,cert,key)
     if telegram_token:
         run('useradd','--system','--home','/var/lib/vpn-bot','--shell','/usr/sbin/nologin','vpnshopbot',check=False)
-        pathlib.Path('/opt/vpn-bot').mkdir(parents=True,exist_ok=True);pathlib.Path('/var/lib/vpn-bot').mkdir(parents=True,exist_ok=True)
-        shutil.copy2(ROOT/'vpn-bot/bot.py','/opt/vpn-bot/bot.py');shutil.copy2(ROOT/'vpn-bot/vpn-bot.service','/etc/systemd/system/vpn-bot.service')
-        shutil.copytree(ROOT/'vpn-bot/assets','/opt/vpn-bot/assets',dirs_exist_ok=True)
-        shutil.copy2(ROOT/'vpn-bot/admin.py','/opt/vpn-bot/admin.py');shutil.copy2(ROOT/'vpn-bot/admin-control.py','/usr/local/sbin/vpn-bot-admin-control');os.chmod('/usr/local/sbin/vpn-bot-admin-control',0o700)
-        shutil.copy2(ROOT/'vpn-bot/vpn-bot-admin.service','/etc/systemd/system/vpn-bot-admin.service');shutil.copy2(ROOT/'vpn-bot/vpn-bot-admin-sudoers','/etc/sudoers.d/vpn-bot-admin');os.chmod('/etc/sudoers.d/vpn-bot-admin',0o440);run('visudo','-cf','/etc/sudoers.d/vpn-bot-admin')
+        pathlib.Path('/var/lib/vpn-bot').mkdir(parents=True,exist_ok=True);install_component_files('bot',ROOT);run('visudo','-cf','/etc/sudoers.d/vpn-bot-admin')
         menu_config=pathlib.Path('/etc/vpn-bot-menu.json')
         if not menu_config.exists():shutil.copy2(ROOT/'config/vpn-bot-menu.example.json',menu_config)
         run('chown','root:vpnshopbot',str(menu_config));os.chmod(menu_config,0o640)
-        bot_env={'TELEGRAM_BOT_TOKEN':telegram_token,'TELEGRAM_ADMIN_ID':telegram_admin_id or '0','TELEGRAM_CHANNEL':telegram_channel,'SHOP_API_URL':'http://127.0.0.1:8080','PUBLIC_BASE_URL':public,'SHOP_API_SECRET':api_secret,'ADMIN_PANEL_URL':public+admin_entry,'BOT_STATE_FILE':'/var/lib/vpn-bot/last_event_v2','PAYMENT_TIMERS_STATE':'/var/lib/vpn-bot/payment_timers.json','BOT_MENU_CONFIG':str(menu_config),'BOT_RUNTIME_CONFIG':'/var/lib/vpn-bot/runtime.json'}
+        bot_env={'TELEGRAM_BOT_TOKEN':telegram_token,'TELEGRAM_ADMIN_ID':telegram_admin_id or '0','TELEGRAM_CHANNEL':telegram_channel,'TELEGRAM_PROXY_URL':telegram_proxy_url,'SHOP_API_URL':'http://127.0.0.1:8080','PUBLIC_BASE_URL':public,'SHOP_API_SECRET':api_secret,'ADMIN_PANEL_URL':public+admin_entry,'BOT_STATE_FILE':'/var/lib/vpn-bot/last_event_v2','PAYMENT_TIMERS_STATE':'/var/lib/vpn-bot/payment_timers.json','BOT_MENU_CONFIG':str(menu_config),'BOT_RUNTIME_CONFIG':'/var/lib/vpn-bot/runtime.json'}
         write_env(pathlib.Path('/etc/vpn-bot.env'),bot_env);run('chown','-R','vpnshopbot:vpnshopbot','/var/lib/vpn-bot','/opt/vpn-bot')
         write_env(pathlib.Path('/etc/vpn-bot-admin.env'),{'BOT_PANEL_BIND':'127.0.0.1','BOT_PANEL_PORT':'8090','BOT_PANEL_USER':bot_panel_user,'BOT_PANEL_PASSWORD':bot_panel_password,'BOT_PANEL_SECRET':secrets.token_urlsafe(48),'BOT_PANEL_ENTRY_PATH':bot_panel_entry,'BOT_PANEL_SECURE_COOKIE':'1'})
-    run('systemctl','daemon-reload');run('systemctl','enable','--now','vpn-shop');run('systemctl','enable','--now','home-vpn-healthcheck.timer','home-vpn-system-check.timer');run('systemctl','start','home-vpn-system-check.service')
+    run('systemctl','daemon-reload');run('systemctl','enable','--now','vpn-shop');run('systemctl','enable','--now','home-vpn-healthcheck.timer','home-vpn-system-check.timer','home-vpn-site-backup.timer');run('systemctl','start','home-vpn-system-check.service')
     if pathlib.Path('/usr/local/bin/kit').exists():run('systemctl','enable','--now','home-vpn-kit-backup.timer')
-    if telegram_token:run('systemctl','enable','--now','vpn-bot','vpn-bot-admin')
+    if telegram_token:run('systemctl','enable','--now','vpn-bot','vpn-bot-admin','home-vpn-bot-backup.timer')
     print('\nHOME-VPN установлен: '+public);print('Редактор: sudo home-vpn-setup configure');print('Проверка: sudo home-vpn-setup doctor')
-    if telegram_token:print('Панель бота:',(bot_admin_url.rstrip('/') if bot_admin_url else 'http://127.0.0.1:8090')+bot_panel_entry);print('Логин панели бота:',bot_panel_user);print('Пароль панели бота:',bot_panel_password)
+    if telegram_token:print('Панель бота:',bot_admin_url);print('Логин панели бота:',bot_panel_user);print('Пароль панели бота:',bot_panel_password)
 
 def doctor(path):
     data=load(path);errors=validate(data)
@@ -298,9 +305,9 @@ def tls_setup():
     cert=ask('TLS-сертификат 3x-ui',detected[0]);key=ask('TLS-ключ 3x-ui',detected[1])
     if not pathlib.Path(cert).is_file() or not pathlib.Path(key).is_file():raise SystemExit('Сертификат или ключ не найден')
     occupied=listener_on(port)
-    if occupied and 'python3' not in occupied:raise SystemExit(f'Порт {port} занят. Используйте существующий внешний прокси или освободите порт: {occupied}')
-    values['PUBLIC_URL']='https://'+domain;values['APP_BIND']='0.0.0.0';values['APP_PORT']=str(port);values['TRUST_PROXY']='0';values['TLS_CERT'],values['TLS_KEY']=install_tls_copy(cert,key);write_env(env_path,values)
-    run('systemctl','restart','vpn-shop');print('Домен и встроенный TLS применены без Nginx: https://'+domain)
+    if occupied and 'nginx' not in occupied:raise SystemExit(f'Порт {port} занят внешним входом. TLS меняется через topology installer: {occupied}')
+    values['PUBLIC_URL']='https://'+domain;values['APP_BIND']='127.0.0.1';values['APP_PORT']='8080';values['TRUST_PROXY']='1';values.pop('TLS_CERT',None);values.pop('TLS_KEY',None);write_env(env_path,values)
+    install_reverse_proxy('https://'+domain,cert,key);run('systemctl','restart','vpn-shop');print('Домен и TLS reverse proxy применены: https://'+domain)
 
 def payment_setup(config_path):
     if os.geteuid()!=0:raise SystemExit('Запустите через sudo')
@@ -316,12 +323,17 @@ def payment_setup(config_path):
         shop_id=ask('ЮKassa Shop ID',values.get('YOOKASSA_SHOP_ID',''));secret=ask('Новый секретный ключ (Enter = оставить текущий)','',True) or values.get('YOOKASSA_SECRET_KEY','')
         if not shop_id or not secret:raise SystemExit('Shop ID и секретный ключ обязательны')
         values['YOOKASSA_SHOP_ID']=shop_id;values['YOOKASSA_SECRET_KEY']=secret;values['YOOKASSA_API_URL']='https://api.yookassa.ru/v3';values.setdefault('YOOKASSA_RETURN_URL','')
-    save(config_path,data);write_env(env_path,values);run('systemctl','restart','vpn-shop');public=values.get('PUBLIC_URL','https://vpn.my.domain.ru').rstrip('/')
+    save(config_path,data);write_env(env_path,values,overwrite_secrets=True);run('systemctl','restart','vpn-shop');public=values.get('PUBLIC_URL','https://vpn.my.domain.ru').rstrip('/')
     print('Режим оплаты применён:',mode)
     if mode=='yookassa':print('Webhook для кабинета ЮKassa:',public+'/api/payments/yookassa/webhook')
 
 def main():
-    parser=argparse.ArgumentParser(description='HOME-VPN installer and configuration editor');parser.add_argument('command',choices=('install','configure','tls','payment','validate','show','doctor'));parser.add_argument('--config',type=pathlib.Path,default=SYSTEM_CONFIG);args=parser.parse_args()
+    global INSTALL_ANSWERS,NON_INTERACTIVE
+    parser=argparse.ArgumentParser(description='HOME-VPN installer and configuration editor');parser.add_argument('command',choices=('install','configure','tls','payment','validate','show','doctor'));parser.add_argument('--config',type=pathlib.Path,default=SYSTEM_CONFIG);parser.add_argument('--answers',type=pathlib.Path);args=parser.parse_args()
+    if args.answers:
+        mode=args.answers.stat().st_mode & 0o777
+        if mode & 0o077:raise SystemExit('Answers-файл должен иметь права 0600')
+        INSTALL_ANSWERS=json.loads(args.answers.read_text(encoding='utf-8'));NON_INTERACTIVE=True
     if args.command=='install':install(args.config)
     elif args.command=='configure':configure(args.config);run('systemctl','restart','vpn-shop',check=False) if os.geteuid()==0 else None
     elif args.command=='tls':tls_setup()

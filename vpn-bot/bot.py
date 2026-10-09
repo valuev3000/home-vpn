@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import hashlib, html, json, math, os, ssl, time, urllib.request, urllib.parse, urllib.error, uuid
+import hashlib, html, json, math, os, pathlib, ssl, time, urllib.request, urllib.parse, urllib.error, uuid
 
 TOKEN=os.getenv("TELEGRAM_BOT_TOKEN","")
 SHOP=os.getenv("SHOP_API_URL","http://127.0.0.1:8080").rstrip("/")
@@ -14,26 +14,31 @@ MENU_CONFIG=os.getenv("BOT_MENU_CONFIG","/etc/vpn-bot-menu.json")
 COMMANDS_STATE=os.getenv("BOT_COMMANDS_STATE","/var/lib/vpn-bot/commands.sha256")
 PROXY_DISABLE_GUIDE=os.getenv("PROXY_DISABLE_GUIDE","/opt/vpn-bot/assets/proxy-disable-guide.png")
 RUNTIME_CONFIG=os.getenv("BOT_RUNTIME_CONFIG","/var/lib/vpn-bot/runtime.json")
-DEVICE_MONTH={1:100,2:190,3:280,4:370,5:460}
-PERIODS={"m1":("1 месяц",1),"m3":("3 месяца",2.8),"m6":("6 месяцев",5.6),"y1":("1 год",10)}
+TELEGRAM_PROXY_URL=os.getenv("TELEGRAM_PROXY_URL","http://127.0.0.1:18080").strip()
+_proxy=urllib.parse.urlparse(TELEGRAM_PROXY_URL)
+if _proxy.scheme not in ("http","https") or _proxy.hostname not in ("127.0.0.1","::1","localhost"):
+    raise RuntimeError("TELEGRAM_PROXY_URL must point to the local health-aware foreign egress; direct Telegram access is forbidden")
+if TELEGRAM_PROXY_URL:
+    # An administrator-wide NO_PROXY must never make Telegram bypass the
+    # dedicated foreign egress. Local shop calls do not use this opener.
+    os.environ["NO_PROXY"]="127.0.0.1,localhost"
+    os.environ["no_proxy"]="127.0.0.1,localhost"
+TELEGRAM_OPENER=urllib.request.build_opener(urllib.request.ProxyHandler({"https":TELEGRAM_PROXY_URL,"http":TELEGRAM_PROXY_URL}))
+def load_default_project_config():
+    for path in (pathlib.Path(__file__).resolve().parents[1]/"config/config.example.json",pathlib.Path("/usr/local/share/home-vpn/config.example.json")):
+        try:return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError,json.JSONDecodeError):pass
+    raise RuntimeError("Не найден единый default config HOME-VPN")
+_DEFAULT_PROJECT_CONFIG=load_default_project_config();_DEFAULT_PRICING=_DEFAULT_PROJECT_CONFIG["pricing"]
+DEVICE_MONTH={int(key):int(value) for key,value in _DEFAULT_PRICING["device_monthly"].items()}
+PERIODS={key:(str(value["name"]),float(value["multiplier"])) for key,value in _DEFAULT_PRICING["periods"].items()}
 CATALOG_CACHE={"value":None}
-MENU_DEFAULT={
-    "welcome_title":"Домашняя приватная сеть",
-    "welcome_text":"Добро пожаловать! Здесь можно оформить и продлить доступ, управлять подключениями и обратиться в поддержку.",
-    "order":["new","renew","upgrade","subscriptions","link","support","site","instructions","status","notifications"],
-    "items":{
-        "new":{"enabled":True,"label":"➕ Купить новую подписку"},
-        "renew":{"enabled":True,"label":"🔄 Продлить подписку"},
-        "upgrade":{"enabled":True,"label":"⬆️ Изменить тариф"},
-        "subscriptions":{"enabled":True,"label":"📋 Подписки и текущие заказы"},
-        "link":{"enabled":True,"label":"🔗 Привязать подписку"},
-        "support":{"enabled":True,"label":"🎫 Поддержка"},
-        "site":{"enabled":True,"label":"🌐 Перейти на сайт"},
-        "instructions":{"enabled":True,"label":"📖 Инструкции по подключению"},
-        "status":{"enabled":True,"label":"🟢 Статус серверов"},
-        "notifications":{"enabled":True,"label":"🔕 Отписаться от уведомлений"},
-    },
-}
+def load_default_menu():
+    for path in (pathlib.Path(__file__).resolve().parents[1]/"config/vpn-bot-menu.example.json",pathlib.Path("/usr/local/share/home-vpn/vpn-bot-menu.example.json")):
+        try:return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError,json.JSONDecodeError):pass
+    raise RuntimeError("Не найден единый default Telegram menu")
+MENU_DEFAULT=load_default_menu()
 LINK_WAIT=set()
 LOGIN_WAIT={}
 MAINT_WAIT=set()
@@ -111,7 +116,7 @@ def tg(method,data=None,files=None):
         body.extend(f"--{boundary}--\r\n".encode()); req=urllib.request.Request(url,bytes(body),headers={"Content-Type":f"multipart/form-data; boundary={boundary}"})
     else: req=urllib.request.Request(url,urllib.parse.urlencode(data or {}).encode())
     try:
-        with urllib.request.urlopen(req,timeout=30) as r:return json.loads(r.read())
+        with (TELEGRAM_OPENER.open(req,timeout=30) if TELEGRAM_OPENER else urllib.request.urlopen(req,timeout=30)) as r:return json.loads(r.read())
     except urllib.error.HTTPError as error:
         try:payload=json.loads(error.read().decode())
         except Exception:payload={}

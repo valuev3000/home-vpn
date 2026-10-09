@@ -1,0 +1,36 @@
+{
+  "mode": 1,
+  "protocol_installer": {
+    "url": "https://downloads.example.com/3x-ui-protocol-installer.sh",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "telegram_egress": {
+    "listen": "127.0.0.1",
+    "port": 18080,
+    "strategy": "leastPing",
+    "probe_interval": "30s"
+  },
+  "site": {
+    "ssh_host": "root@central.example.com",
+    "address": "10.10.0.10",
+    "public_url": "https://vpn.my.domain.ru",
+    "tls_cert": "",
+    "tls_key": ""
+  },
+  "nodes": [
+    {
+      "id": "foreign-1",
+      "name": "Foreign VPN node 1",
+      "country": "DE",
+      "flag": "🇩🇪",
+      "ssh_host": "root@vpn-node-1.example.com",
+      "address": "10.10.0.11",
+      "public_host": "node1.vpn.my.domain.ru",
+      "ingress_address": "",
+      "sni": "dl.google.com",
+      "cert": "",
+      "key": ""
+    }
+  ],
+  "emergency_node": "foreign-1"
+}

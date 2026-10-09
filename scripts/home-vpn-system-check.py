@@ -21,6 +21,10 @@ CERTIFICATES = (
 
 def main() -> None:
     now = int(time.time());checks={};warnings=[]
+    xui_loaded=subprocess.run(
+        ['systemctl','show','-p','LoadState','--value','x-ui'],
+        capture_output=True,text=True,
+    ).stdout.strip()=='loaded'
     disk = shutil.disk_usage('/')
     disk_percent = round((disk.total-disk.free)*100/disk.total,1)
     checks['disk_used_percent']=disk_percent
@@ -29,10 +33,13 @@ def main() -> None:
     archives=sorted(BACKUP_DIR.glob('kit-backup-*.tar.gz'),key=lambda path:path.stat().st_mtime,reverse=True)
     backup_age_hours=round((now-archives[0].stat().st_mtime)/3600,1) if archives else None
     checks['last_backup_age_hours']=backup_age_hours
-    if backup_age_hours is None:warnings.append('Резервные копии не найдены')
-    elif backup_age_hours>36:warnings.append(f'Последняя резервная копия создана {backup_age_hours} ч. назад')
+    if xui_loaded and backup_age_hours is None:warnings.append('Резервные копии 3x-ui не найдены')
+    elif xui_loaded and backup_age_hours>36:warnings.append(f'Последняя резервная копия 3x-ui создана {backup_age_hours} ч. назад')
 
-    for service in ('vpn-shop','x-ui'):
+    services=['vpn-shop']
+    if pathlib.Path('/etc/vpn-bot.env').is_file():services.extend(('vpn-bot','vpn-bot-admin','home-vpn-bot-egress'))
+    if xui_loaded:services.append('x-ui')
+    for service in services:
         active=subprocess.run(['systemctl','is-active','--quiet',service]).returncode==0
         checks['service_'+service]=active
         if not active:warnings.append(f'Служба {service} не работает')

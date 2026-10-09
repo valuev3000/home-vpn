@@ -1,0 +1,10 @@
+[Unit]
+Description=Create and verify HOME-VPN site state backup
+After=vpn-shop.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/home-vpn-state-backup create site
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

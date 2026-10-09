@@ -1,14 +1,17 @@
 # Установка HOME-VPN
 
-Актуальная предварительная версия — `0.0.4-pre`. Точная схема тестовых LXC и
-команды полной настройки находятся в
-[installation-0.0.4-pre.md](installation-0.0.4-pre.md).
+Если развёртывание включает центральную VPS (желательно в RU) и одну или несколько зарубежных VPN-нод
+либо один совмещённый зарубежный сервер, сначала выберите архитектуру в
+[мастере многосерверной установки](topology-installation.md).
+
+Актуальная предварительная версия — `0.0.5-pre`. Инструкция для этой версии находится в
+[installation-0.0.5-pre.md](installation-0.0.5-pre.md).
 
 ## Роли узлов
 
-- RU — сайт, API и управляющая панель 3x-ui без локальных VPN-inbound;
-- PL — Telegram-бот, 10 протоколов 3X-UI_KIT v1.2 и Emergency MTProto;
-- RU синхронизирует список удалённых PL-inbound;
+- управляющая VPS — сайт, API, Telegram-бот и все HOME-VPN web-панели; в mode 3 это единственная иностранная VPS;
+- каждая зарубежная VPS — 11 подключений 3x-ui;
+- Telegram API-трафик бота балансируется по VLESS/XHTTP-выходам всех доступных зарубежных VPS;
 - отдельный backup-server и HOME-VPN backup-agent не используются.
 
 ## Обычная установка компонентов
@@ -32,45 +35,39 @@ sudo home-vpn-setup tls
 sudo home-vpn-setup doctor
 ```
 
-## Полная настройка тестовых LXC
+## Полная настройка VPS
 
-С рабочей станции, имеющей SSH-доступ к Proxmox:
+С рабочей станции, имеющей root SSH-доступ ко всем VPS:
 
 ```bash
-python3 scripts/configure-test-lxc-topology.py
-python3 scripts/configure-test-lxc-topology.py \
-  --apply --confirm 'REBUILD TEST LXC'
+python3 scripts/install-home-vpn-topology.py \
+  --write-plan topology.local.json
+python3 scripts/install-home-vpn-topology.py \
+  --config topology.local.json \
+  --apply --confirm 'INSTALL HOME VPN TOPOLOGY'
 ```
 
-Первая команда показывает план и ничего не меняет. Вторая является намеренно
-разрушительной для тестовых VPN-inbound: перед изменением она создаёт rollback,
-очищает старые подключения и строит текущую схему из 11 протоколов. Production
-серверы этим сценарием не обслуживаются.
+Первая команда создаёт локальный план и ничего не меняет. Вторая применяет
+проверенный план; частично настроенные или несовместимые 3x-ui ноды не удаляются автоматически.
 
 ## Прямой и каскадный режимы
 
 Текущий режим по умолчанию:
 
 ```text
-пользователь → PL → интернет
+пользователь → зарубежная VPS → интернет
 ```
 
 Опциональный каскад:
 
 ```text
-пользователь → RU → PL → интернет
+пользователь → центральная VPS → зарубежная VPS → интернет
 ```
 
-Переключение уже установленных LXC не удаляет inbound или пользователей:
+Для переключения измените `mode`, `ingress_address` и `public_host` в локальном плане, сначала выполнив dry-run:
 
 ```bash
-python3 scripts/configure-test-lxc-topology.py \
-  --mode-only --connection-mode cascade \
-  --apply --confirm 'CONFIGURE CONNECTION MODE'
-
-python3 scripts/configure-test-lxc-topology.py \
-  --mode-only --connection-mode direct \
-  --apply --confirm 'CONFIGURE CONNECTION MODE'
+python3 scripts/install-home-vpn-topology.py --config topology.local.json
 ```
 
 Каскад перенаправляет только VPN-порты. Сайт, административные панели и бот не
