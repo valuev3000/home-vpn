@@ -74,6 +74,7 @@ class PlanTests(unittest.TestCase):
         script = MODULE.PREPARE_SERVER
         self.assertIn("ubuntu:22.04|ubuntu:24.04", script)
         self.assertIn("-checkend 604800", script)
+        self.assertIn('[ "$xui_mode" = preserve ] || openssl x509', script)
         self.assertIn('ufw allow "${ssh_port}/tcp"', script)
         self.assertIn('if [ "$xui_mode" = fresh ]',script)
         for port in (8388, 8444, 51821, 51822):

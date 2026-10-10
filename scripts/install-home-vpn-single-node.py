@@ -72,7 +72,7 @@ certificate_ok=false
 if [ -s "$cert_dir/fullchain.pem" ] && [ -s "$cert_dir/privkey.pem" ]; then
     if openssl x509 -in "$cert_dir/fullchain.pem" -noout -checkend 604800 >/dev/null 2>&1 && \
        openssl x509 -in "$cert_dir/fullchain.pem" -noout -checkhost "$site_domain" >/dev/null 2>&1 && \
-       openssl x509 -in "$cert_dir/fullchain.pem" -noout -checkhost "$panel_domain" >/dev/null 2>&1; then
+       { [ "$xui_mode" = preserve ] || openssl x509 -in "$cert_dir/fullchain.pem" -noout -checkhost "$panel_domain" >/dev/null 2>&1; }; then
         certificate_ok=true
     fi
 fi
