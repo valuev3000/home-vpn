@@ -460,7 +460,8 @@ print(json.dumps({"rows":rows,"integrity":integrity,"install_env":env.read_text(
     environment = parse_env(data.pop("install_env"))
     settings = data.pop("settings", {})
     token = token_override or environment.get("XUI_API_TOKEN", "")
-    access = environment.get("XUI_ACCESS_URL", "").split()[0]
+    access_values = environment.get("XUI_ACCESS_URL", "").split()
+    access = access_values[0] if access_values else ""
     if preserve:
         base_path=str(settings.get("webBasePath") or "").strip("/")
         if not node.get("api_host") or not base_path:

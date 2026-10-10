@@ -98,6 +98,10 @@ class GeneratedConfigurationTests(unittest.TestCase):
         self.assertEqual("secret-token",MODULE.parse_xui_api_token("notice\napiToken: secret-token\n"))
         with self.assertRaises(RuntimeError):MODULE.parse_xui_api_token("no token")
 
+    def test_empty_legacy_access_url_is_safe(self):
+        self.assertEqual({}, MODULE.parse_env(""))
+        self.assertEqual([], MODULE.parse_env("").get("XUI_ACCESS_URL", "").split())
+
     def test_local_ssh_command_runs_without_openssh(self):
         result = MODULE.ssh_command("local", ["python3", "-c", "print(123)"], capture=True)
         self.assertEqual("123", result.stdout.strip())
