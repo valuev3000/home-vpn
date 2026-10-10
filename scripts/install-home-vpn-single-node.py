@@ -302,6 +302,16 @@ def preserve_preflight(site_domain, bot_enabled, nginx_root=pathlib.Path("/etc/n
             raise RuntimeError("Vhost содержит несколько server-блоков; автоматическое изменение запрещено")
         if re.search(r"\blocation\s+(?:\^~\s+|=\s+)?/\s*\{", text):
             raise RuntimeError("Vhost уже содержит location /; автоматическое изменение запрещено")
+        included_roots = []
+        for include in re.findall(r"\binclude\s+([^;*?\[\]]+)\s*;", text):
+            included = pathlib.Path(include)
+            if not included.is_file():
+                continue
+            included_text = included.read_text(encoding="utf-8")
+            if re.search(r"\blocation\s+(?:\^~\s+|=\s+)?/\s*\{", included_text):
+                included_roots.append(included)
+        if len(included_roots) > 1:
+            raise RuntimeError("Vhost получает location / из нескольких include; изменение запрещено")
     return {"inbounds": len(rows), "vhost": str(vhost)}
 
 

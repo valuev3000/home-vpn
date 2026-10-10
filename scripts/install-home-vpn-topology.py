@@ -886,6 +886,15 @@ def configure_preserved_nginx_route(topology):
 '''
     code=r'''import os,pathlib,re,shutil,subprocess,sys,tempfile
 host=sys.argv[1];snippet=sys.stdin.read();marker="include /etc/nginx/snippets/home-vpn-site.conf;"
+root_pattern=re.compile(r"\blocation\s+(?:\^~\s+|=\s+)?/\s*\{")
+def replace_block(value,match,replacement):
+ start=match.start();opening=value.find("{",match.start(),match.end());depth=0
+ for index in range(opening,len(value)):
+  if value[index]=="{":depth+=1
+  elif value[index]=="}":
+   depth-=1
+   if depth==0:return value[:start]+replacement.rstrip()+value[index+1:]
+ raise SystemExit("Незакрытый location / во включаемом nginx-файле")
 candidates=[pathlib.Path("/etc/nginx/sites-enabled")/host,pathlib.Path("/etc/nginx/sites-available")/host,pathlib.Path("/etc/nginx/conf.d")/(host+".conf")]
 source=next((p.resolve() for p in candidates if p.exists()),None)
 if source is None:
@@ -895,26 +904,39 @@ if source is None:
    except (OSError,UnicodeError):continue
    if re.search(r"\bserver_name\s+"+re.escape(host)+r"(?:\s|;)",text):source=p.resolve();break
 if source is None:raise SystemExit("Не найден nginx vhost домена "+host)
-text=source.read_text(encoding="utf-8");snippet_path=pathlib.Path("/etc/nginx/snippets/home-vpn-site.conf")
+text=source.read_text(encoding="utf-8");original_text=text;snippet_path=pathlib.Path("/etc/nginx/snippets/home-vpn-site.conf")
 old_snippet=snippet_path.read_bytes() if snippet_path.is_file() else None
+rendered=old_snippet.decode("utf-8") if marker in text and old_snippet is not None else snippet
 if marker not in text:
  if len(re.findall(r"\bserver\s*\{",text))!=1:raise SystemExit("Vhost содержит несколько server-блоков; автоматическое изменение запрещено")
- if re.search(r"\blocation\s+(?:\^~\s+|=\s+)?/\s*\{",text):raise SystemExit("Vhost уже содержит location /; автоматическое изменение запрещено")
- pos=text.rfind("}")
- if pos<0:raise SystemExit("Некорректный nginx vhost")
+ if root_pattern.search(text):raise SystemExit("Vhost уже содержит location /; автоматическое изменение запрещено")
+ included=[]
+ for include in re.findall(r"\binclude\s+([^;*?\[\]]+)\s*;",text):
+  path=pathlib.Path(include)
+  if path.is_file():
+   value=path.read_text(encoding="utf-8");match=root_pattern.search(value)
+   if match:included.append((include,value,match))
+ if len(included)>1:raise SystemExit("Vhost получает location / из нескольких include; автоматическое изменение запрещено")
+ if included:
+  include,value,match=included[0];rendered=replace_block(value,match,snippet)
+  directive=re.compile(r"\binclude\s+"+re.escape(include)+r"\s*;")
+  text=directive.sub(marker,text,count=1)
+ else:
+  pos=text.rfind("}")
+  if pos<0:raise SystemExit("Некорректный nginx vhost")
+  text=text[:pos]+"    "+marker+"\n"+text[pos:]
  backup=source.with_name(source.name+".pre-home-vpn")
  if not backup.exists():shutil.copy2(source,backup);os.chmod(backup,0o600)
- updated=text[:pos]+"    "+marker+"\n"+text[pos:]
  fd,tmp=tempfile.mkstemp(prefix=source.name+".",dir=source.parent,text=True)
- with os.fdopen(fd,"w",encoding="utf-8") as out:out.write(updated)
+ with os.fdopen(fd,"w",encoding="utf-8") as out:out.write(text)
  os.chmod(tmp,0o644);os.replace(tmp,source)
 snippet_path.parent.mkdir(parents=True,exist_ok=True)
 fd,tmp=tempfile.mkstemp(prefix=snippet_path.name+".",dir=snippet_path.parent,text=True)
-with os.fdopen(fd,"w",encoding="utf-8") as out:out.write(snippet)
+with os.fdopen(fd,"w",encoding="utf-8") as out:out.write(rendered)
 os.chmod(tmp,0o644);os.replace(tmp,snippet_path)
 check=subprocess.run(["nginx","-t"],text=True,capture_output=True)
 if check.returncode:
- source.write_text(text,encoding="utf-8");os.chmod(source,0o644)
+ source.write_text(original_text,encoding="utf-8");os.chmod(source,0o644)
  if old_snippet is None:snippet_path.unlink(missing_ok=True)
  else:snippet_path.write_bytes(old_snippet);os.chmod(snippet_path,0o644)
  subprocess.run(["nginx","-t"],check=False)

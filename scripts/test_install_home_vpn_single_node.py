@@ -131,6 +131,32 @@ class PlanTests(unittest.TestCase):
                     "vpn.example.com", False, nginx_root=root, database=database,
                 )
 
+    def test_preserve_preflight_accepts_one_included_root_location(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            database = root / "x-ui.db"
+            connection = sqlite3.connect(database)
+            connection.executescript("""
+                CREATE TABLE settings (key TEXT, value TEXT);
+                CREATE TABLE inbounds (protocol TEXT, enable INTEGER, stream_settings TEXT);
+                INSERT INTO settings VALUES ('webBasePath','hidden');
+                INSERT INTO inbounds VALUES ('vless',1,'{"network":"xhttp"}');
+            """)
+            connection.commit(); connection.close()
+            included = root / "snippets" / "shared.conf"
+            included.parent.mkdir(parents=True)
+            included.write_text("location / { try_files $uri =404; }\n", encoding="utf-8")
+            vhost = root / "sites-enabled" / "vpn.example.com"
+            vhost.parent.mkdir(parents=True)
+            vhost.write_text(
+                f"server {{ server_name vpn.example.com; include {included}; }}\n",
+                encoding="utf-8",
+            )
+            result = MODULE.preserve_preflight(
+                "vpn.example.com", False, nginx_root=root, database=database,
+            )
+            self.assertEqual(str(vhost.resolve()), result["vhost"])
+
 
 if __name__ == "__main__":
     unittest.main()
