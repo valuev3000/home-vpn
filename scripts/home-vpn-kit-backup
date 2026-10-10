@@ -7,15 +7,29 @@ RETENTION_DAYS=${KIT_BACKUP_RETENTION_DAYS:-30}
   exit 2
 }
 
-before=$(find /root -maxdepth 1 -type f -name 'kit-backup-*.tar.gz' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2- || true)
-/usr/local/bin/kit backup
-archive=$(find /root -maxdepth 1 -type f -name 'kit-backup-*.tar.gz' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)
-[[ -n $archive && $archive != "$before" ]] || { echo "kit backup did not create a new archive" >&2; exit 1; }
+umask 077
+if [[ -x /usr/local/bin/kit ]]; then
+  before=$(find /root -maxdepth 1 -type f -name 'kit-backup-*.tar.gz' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2- || true)
+  /usr/local/bin/kit backup
+  archive=$(find /root -maxdepth 1 -type f -name 'kit-backup-*.tar.gz' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)
+  [[ -n $archive && $archive != "$before" ]] || { echo "kit backup did not create a new archive" >&2; exit 1; }
+else
+  [[ -s /etc/x-ui/x-ui.db ]] || { echo "/etc/x-ui/x-ui.db not found" >&2; exit 1; }
+  stamp=$(date -u +%Y%m%d-%H%M%S)
+  archive="/root/xui-backup-${stamp}.tar.gz"
+  items=(etc/x-ui/x-ui.db)
+  [[ -f /etc/x-ui/install-result.env ]] && items+=(etc/x-ui/install-result.env)
+  [[ -f /etc/systemd/system/x-ui.service ]] && items+=(etc/systemd/system/x-ui.service)
+  [[ -d /etc/nginx ]] && items+=(etc/nginx)
+  tar -czf "$archive" -C / "${items[@]}"
+  chmod 0600 "$archive"
+fi
 
 temporary=$(mktemp -d)
 trap 'rm -rf -- "$temporary"' EXIT
 tar -tzf "$archive" >/dev/null
-tar -xzf "$archive" -C "$temporary" ./etc/x-ui/x-ui.db
+tar -xzf "$archive" -C "$temporary" ./etc/x-ui/x-ui.db 2>/dev/null || \
+  tar -xzf "$archive" -C "$temporary" etc/x-ui/x-ui.db
 python3 - "$temporary/etc/x-ui/x-ui.db" <<'PY'
 import sqlite3, sys
 connection = sqlite3.connect(sys.argv[1])
@@ -36,4 +50,6 @@ chmod 600 "$checksum_tmp"
 mv -f -- "$checksum_tmp" "$checksum"
 find /root -maxdepth 1 -type f -name 'kit-backup-*.tar.gz' -mtime "+$RETENTION_DAYS" -delete
 find /root -maxdepth 1 -type f -name 'kit-backup-*.tar.gz.sha256' -mtime "+$RETENTION_DAYS" -delete
+find /root -maxdepth 1 -type f -name 'xui-backup-*.tar.gz' -mtime "+$RETENTION_DAYS" -delete
+find /root -maxdepth 1 -type f -name 'xui-backup-*.tar.gz.sha256' -mtime "+$RETENTION_DAYS" -delete
 echo "verified: $archive"

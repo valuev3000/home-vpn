@@ -36,6 +36,11 @@ def topology(mode=1, nodes=1):
 
 
 class TopologyValidationTests(unittest.TestCase):
+    def test_preserve_is_limited_to_single_server(self):
+        value=topology(3);value["xui_install_mode"]="preserve";MODULE.validate_topology(value)
+        value=topology(1);value["xui_install_mode"]="preserve"
+        with self.assertRaisesRegex(SystemExit,"только для mode 3"):MODULE.validate_topology(value)
+
     def test_local_target_is_valid_for_single_server(self):
         value = topology(3)
         value["site"]["ssh_host"] = "local"
@@ -89,6 +94,10 @@ class TopologyValidationTests(unittest.TestCase):
 
 
 class GeneratedConfigurationTests(unittest.TestCase):
+    def test_api_token_parser_does_not_accept_other_output(self):
+        self.assertEqual("secret-token",MODULE.parse_xui_api_token("notice\napiToken: secret-token\n"))
+        with self.assertRaises(RuntimeError):MODULE.parse_xui_api_token("no token")
+
     def test_local_ssh_command_runs_without_openssh(self):
         result = MODULE.ssh_command("local", ["python3", "-c", "print(123)"], capture=True)
         self.assertEqual("123", result.stdout.strip())

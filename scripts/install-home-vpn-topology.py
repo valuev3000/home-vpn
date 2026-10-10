@@ -186,6 +186,11 @@ def validate_topology(topology):
     mode = int(topology.get("mode", 0))
     if mode not in TOPOLOGY_MODES:
         raise SystemExit("topology.mode должен быть 1, 2 или 3")
+    xui_mode = topology.get("xui_install_mode", "fresh")
+    if xui_mode not in ("fresh", "preserve"):
+        raise SystemExit("xui_install_mode должен быть fresh или preserve")
+    if xui_mode == "preserve" and mode != 3:
+        raise SystemExit("xui_install_mode=preserve поддерживается только для mode 3")
     installer = topology.get("protocol_installer") or {}
     if urllib.parse.urlparse(str(installer.get("url") or "")).scheme != "https":
         raise SystemExit("protocol_installer.url должен быть HTTPS-URL")
@@ -380,6 +385,10 @@ systemctl daemon-reload
 systemctl restart x-ui kit-sub
 /usr/local/bin/kit user del homevpn-bootstrap >/dev/null 2>&1 || true
 ''', timeout=960)
+    install_xui_backup(target)
+
+
+def install_xui_backup(target):
     for name, destination, mode in (
         ("home-vpn-kit-backup", "/usr/local/sbin/home-vpn-kit-backup", 0o700),
         ("home-vpn-kit-backup.service", "/etc/systemd/system/home-vpn-kit-backup.service", 0o644),
@@ -387,6 +396,28 @@ systemctl restart x-ui kit-sub
     ):
         push_file(target, ROOT / "scripts" / name, destination, mode)
     ssh_script(target, "set -Eeuo pipefail\nsystemctl daemon-reload\nsystemctl enable --now home-vpn-kit-backup.timer\nsystemctl start home-vpn-kit-backup.service\n")
+
+
+def parse_xui_api_token(output):
+    match=re.search(r"^apiToken:\s*(\S+)\s*$",output,re.MULTILINE)
+    if not match:raise RuntimeError("3x-ui не вернула API token; обновите панель или создайте токен в Settings → API Tokens")
+    return match.group(1)
+
+
+def existing_xui_token(target):
+    """Mint one named token through the panel CLI without reading user credentials."""
+    locate = r'''set -Eeuo pipefail
+for candidate in /usr/local/x-ui/x-ui /usr/local/bin/x-ui /usr/bin/x-ui; do
+    if [ -x "$candidate" ]; then printf '%s\n' "$candidate"; exit; fi
+done
+exit 1
+'''
+    binary = ssh_script(target, locate, capture=True).stdout.strip().splitlines()[-1]
+    result = ssh_command(
+        target, [binary, "setting", "-getApiToken", "-tokenName", "home-vpn"],
+        capture=True, timeout=60,
+    )
+    return parse_xui_api_token(result.stdout)
 
 
 def parse_env(content):
@@ -403,21 +434,38 @@ def parse_env(content):
     return values
 
 
-def node_inventory(node):
+def node_inventory(node, token_override=""):
     code = r'''import json, pathlib, sqlite3
 db=sqlite3.connect("file:/etc/x-ui/x-ui.db?mode=ro",uri=True);db.row_factory=sqlite3.Row
 rows=[dict(row) for row in db.execute("SELECT id,remark,protocol,port,enable,stream_settings FROM inbounds ORDER BY id")]
 integrity=db.execute("PRAGMA integrity_check").fetchone()[0];db.close()
-print(json.dumps({"rows":rows,"integrity":integrity,"install_env":pathlib.Path("/etc/x-ui/install-result.env").read_text()},ensure_ascii=False))
+settings={}
+db=sqlite3.connect("file:/etc/x-ui/x-ui.db?mode=ro",uri=True)
+try:settings=dict(db.execute("SELECT key,value FROM settings"))
+except sqlite3.Error:pass
+db.close()
+env=pathlib.Path("/etc/x-ui/install-result.env")
+print(json.dumps({"rows":rows,"integrity":integrity,"install_env":env.read_text() if env.is_file() else "","settings":settings},ensure_ascii=False))
 '''
     data = json.loads(ssh_python(node["ssh_host"], code, capture=True).stdout)
     remarks = {row["remark"] for row in data["rows"]}
     mtproto_rows=[row for row in data["rows"] if row["protocol"]=="mtproto"]
-    if data["integrity"] != "ok" or len(data["rows"]) != 11 or not KIT_BASE_REMARKS.issubset(remarks) or len(mtproto_rows)!=1:
+    preserve=bool(token_override)
+    if data["integrity"] != "ok":
+        raise RuntimeError(f"{node['id']}: SQLite integrity_check неуспешен")
+    if not preserve and (len(data["rows"]) != 11 or not KIT_BASE_REMARKS.issubset(remarks) or len(mtproto_rows)!=1):
         raise RuntimeError(f"{node['id']}: ожидалось ровно 11 подключений KIT, получено {len(data['rows'])}")
+    if preserve and not any(bool(row.get("enable")) for row in data["rows"]):
+        raise RuntimeError(f"{node['id']}: в существующей 3x-ui нет активных inbounds")
     environment = parse_env(data.pop("install_env"))
-    token = environment.get("XUI_API_TOKEN", "")
+    settings = data.pop("settings", {})
+    token = token_override or environment.get("XUI_API_TOKEN", "")
     access = environment.get("XUI_ACCESS_URL", "").split()[0]
+    if preserve:
+        base_path=str(settings.get("webBasePath") or "").strip("/")
+        if not node.get("api_host") or not base_path:
+            raise RuntimeError(f"{node['id']}: для существующей панели нужны api_host и webBasePath")
+        access="https://"+str(node["api_host"])+"/"+base_path
     if not token or not access:
         raise RuntimeError(f"{node['id']}: KIT не сохранил API token/panel URL")
     parsed = urllib.parse.urlparse(access)
@@ -443,9 +491,9 @@ print(json.dumps({"rows":rows,"integrity":integrity,"install_env":pathlib.Path("
             "protocol": item["protocol"], "transport": stream.get("network") or "tcp",
             "enabled": bool(item["enable"]),
         })
-    mtproto = mtproto_rows[0]
+    mtproto = mtproto_rows[0] if mtproto_rows else None
     return {"token": token, "panel_url": access.rstrip("/"), "routes": routes,
-            "mtproto_id": int(mtproto["id"]), "rows": data["rows"]}
+            "mtproto_id": int(mtproto["id"]) if mtproto else None, "rows": data["rows"]}
 
 
 def push_json(target, path, payload, mode=0o600):
@@ -539,16 +587,18 @@ HOME_VPN_INSTALL_BOT=0 python3 /opt/home-vpn-source/scripts/home-vpn-setup.py in
 ''', timeout=1200)
         finally:
             ssh_script(target, "rm -f -- /root/home-vpn-site-answers.json\n")
+    site_updates={"TRUST_PROXY":"1"}
     emergency_node = next(node for node in topology["nodes"] if node["id"] == topology["emergency_node"])
     bot_inventory = inventories[emergency_node["id"]]
-    token_env = next(node["token_env"] for node in config["nodes"] if node["id"] == emergency_node["id"])
-    update_remote_envs(target, {"/etc/vpn-shop.env": {
-        "TRUST_PROXY": "1",
-        "MTPROTO_INBOUND_ID": str(bot_inventory["mtproto_id"]),
-        "MTPROTO_PUBLIC_HOST": emergency_node["public_host"],
-        "MTPROTO_PUBLIC_PORT": "443", "MTPROTO_XUI_URL": bot_inventory["panel_url"],
-        "MTPROTO_XUI_TOKEN_ENV": token_env,
-    }})
+    if bot_inventory.get("mtproto_id") is not None:
+        token_env = next(node["token_env"] for node in config["nodes"] if node["id"] == emergency_node["id"])
+        site_updates.update({
+            "MTPROTO_INBOUND_ID":str(bot_inventory["mtproto_id"]),
+            "MTPROTO_PUBLIC_HOST":emergency_node["public_host"],
+            "MTPROTO_PUBLIC_PORT":"443","MTPROTO_XUI_URL":bot_inventory["panel_url"],
+            "MTPROTO_XUI_TOKEN_ENV":token_env,
+        })
+    update_remote_envs(target,{"/etc/vpn-shop.env":site_updates})
     ssh_script(target, "systemctl restart vpn-shop\n")
 
 
@@ -820,8 +870,63 @@ def mode3_nginx_config(site):
 '''
 
 
+def configure_preserved_nginx_route(topology):
+    site=topology["site"];parsed=valid_public_url(site["public_url"]);target=site["ssh_host"]
+    snippet='''location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header Connection "";
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+}
+'''
+    code=r'''import os,pathlib,re,shutil,subprocess,sys,tempfile
+host=sys.argv[1];snippet=sys.stdin.read();marker="include /etc/nginx/snippets/home-vpn-site.conf;"
+candidates=[pathlib.Path("/etc/nginx/sites-enabled")/host,pathlib.Path("/etc/nginx/sites-available")/host,pathlib.Path("/etc/nginx/conf.d")/(host+".conf")]
+source=next((p.resolve() for p in candidates if p.exists()),None)
+if source is None:
+ for p in pathlib.Path("/etc/nginx").glob("**/*"):
+  if p.is_file():
+   try:text=p.read_text(encoding="utf-8")
+   except (OSError,UnicodeError):continue
+   if re.search(r"\bserver_name\s+"+re.escape(host)+r"(?:\s|;)",text):source=p.resolve();break
+if source is None:raise SystemExit("Не найден nginx vhost домена "+host)
+text=source.read_text(encoding="utf-8");snippet_path=pathlib.Path("/etc/nginx/snippets/home-vpn-site.conf")
+old_snippet=snippet_path.read_bytes() if snippet_path.is_file() else None
+if marker not in text:
+ if len(re.findall(r"\bserver\s*\{",text))!=1:raise SystemExit("Vhost содержит несколько server-блоков; автоматическое изменение запрещено")
+ if re.search(r"\blocation\s+(?:\^~\s+|=\s+)?/\s*\{",text):raise SystemExit("Vhost уже содержит location /; автоматическое изменение запрещено")
+ pos=text.rfind("}")
+ if pos<0:raise SystemExit("Некорректный nginx vhost")
+ backup=source.with_name(source.name+".pre-home-vpn")
+ if not backup.exists():shutil.copy2(source,backup);os.chmod(backup,0o600)
+ updated=text[:pos]+"    "+marker+"\n"+text[pos:]
+ fd,tmp=tempfile.mkstemp(prefix=source.name+".",dir=source.parent,text=True)
+ with os.fdopen(fd,"w",encoding="utf-8") as out:out.write(updated)
+ os.chmod(tmp,0o644);os.replace(tmp,source)
+snippet_path.parent.mkdir(parents=True,exist_ok=True)
+fd,tmp=tempfile.mkstemp(prefix=snippet_path.name+".",dir=snippet_path.parent,text=True)
+with os.fdopen(fd,"w",encoding="utf-8") as out:out.write(snippet)
+os.chmod(tmp,0o644);os.replace(tmp,snippet_path)
+check=subprocess.run(["nginx","-t"],text=True,capture_output=True)
+if check.returncode:
+ source.write_text(text,encoding="utf-8");os.chmod(source,0o644)
+ if old_snippet is None:snippet_path.unlink(missing_ok=True)
+ else:snippet_path.write_bytes(old_snippet);os.chmod(snippet_path,0o644)
+ subprocess.run(["nginx","-t"],check=False)
+ raise SystemExit(check.stderr or check.stdout or "nginx -t failed")
+'''
+    ssh_command(target,["python3","-c",code,parsed.hostname],input_text=snippet)
+    ssh_script(target,"set -Eeuo pipefail\nsystemctl reload nginx\n")
+
+
 def configure_mode3_public_route(topology, inventories):
     if topology["mode"] != 3:return
+    if topology.get("xui_install_mode","fresh")=="preserve":
+        configure_preserved_nginx_route(topology);return
     target=topology["site"]["ssh_host"]
     if remote_file_exists(target,"/etc/nginx/kit-stream.conf"):
         site=topology["site"]
@@ -986,10 +1091,17 @@ def apply(topology):
     targets={topology["site"]["ssh_host"]}|{node["ssh_host"] for node in topology["nodes"]}
     with tempfile.TemporaryDirectory(prefix="home-vpn-topology-") as temporary:
         archive=str(pathlib.Path(temporary)/"source.tar.gz");installer=str(pathlib.Path(temporary)/"3x-ui-protocol-installer.sh")
-        build_source_archive(archive);download_protocol_installer(installer,topology)
+        build_source_archive(archive)
+        if topology.get("xui_install_mode","fresh")!="preserve":download_protocol_installer(installer,topology)
         for target in sorted(targets):deploy_source(target,archive)
-        for node in topology["nodes"]:install_kit(node,installer)
-    inventories={node["id"]:node_inventory(node) for node in topology["nodes"]}
+        if topology.get("xui_install_mode","fresh")=="preserve":
+            for node in topology["nodes"]:install_xui_backup(node["ssh_host"])
+        else:
+            for node in topology["nodes"]:install_kit(node,installer)
+    preserved_token=existing_xui_token(topology["site"]["ssh_host"]) if topology.get("xui_install_mode","fresh")=="preserve" else ""
+    inventories={node["id"]:node_inventory(node,preserved_token) for node in topology["nodes"]}
+    if preserved_token:
+        for inventory in inventories.values():panel_api(inventory,"GET","/panel/api/inbounds/list")
     install_site(topology,inventories,credentials)
     enforce_primary_site(topology)
     configure_mode3_public_route(topology,inventories)
@@ -999,7 +1111,8 @@ def apply(topology):
     install_placeholders(topology)
     configure_cascade(topology,inventories)
     for node in topology["nodes"]:
-        ssh_script(node["ssh_host"],"systemctl is-active --quiet x-ui nginx kit-sub home-vpn-kit-backup.timer\n")
+        services="x-ui nginx home-vpn-kit-backup.timer"+(" kit-sub" if topology.get("xui_install_mode","fresh")!="preserve" else "")
+        ssh_script(node["ssh_host"],"systemctl is-active --quiet "+services+"\n")
     ssh_script(topology["site"]["ssh_host"],"systemctl is-active --quiet vpn-shop\n")
     if bot_enabled(topology):
         ssh_script(topology["site"]["ssh_host"],"systemctl is-active --quiet vpn-bot vpn-bot-admin home-vpn-bot-egress\n")

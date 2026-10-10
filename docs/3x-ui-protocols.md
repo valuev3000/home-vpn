@@ -30,7 +30,8 @@ AmneziaWG 3.1 и MTProto. Сайт получает фактические inbou
 
 `home-vpn-kit-backup.timer` ежедневно запускает совместимую команду локального
 backup, проверяет структуру архива и выполняет `PRAGMA integrity_check` для базы
-3x-ui. Архивы остаются в `/root/kit-backup-*.tar.gz`; срок хранения по умолчанию
+3x-ui. KIT-архивы остаются в `/root/kit-backup-*.tar.gz`, а при установке поверх
+обычной 3x-ui — в `/root/xui-backup-*.tar.gz`; срок хранения по умолчанию
 составляет 30 дней.
 
 ```bash

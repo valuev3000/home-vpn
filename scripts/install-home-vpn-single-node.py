@@ -27,6 +27,7 @@ site_domain=$1
 panel_domain=$2
 cert_email=$3
 ssh_port=$4
+xui_mode=$5
 export DEBIAN_FRONTEND=noninteractive
 
 . /etc/os-release
@@ -49,18 +50,22 @@ if [ "$(awk '/MemTotal/ {print $2}' /proc/meminfo)" -lt 1500000 ] && ! swapon --
     grep -q '^/swapfile ' /etc/fstab || printf '%s\n' '/swapfile none swap sw 0 0' >> /etc/fstab
 fi
 
-ufw default deny incoming
-ufw default allow outgoing
-ufw allow "${ssh_port}/tcp"
-ufw allow 80/tcp
-ufw allow 443/tcp
-ufw allow 443/udp
-ufw allow 8388/tcp
-ufw allow 8388/udp
-ufw allow 8444/udp
-ufw allow 51821/udp
-ufw allow 51822/udp
-ufw --force enable
+if [ "$xui_mode" = fresh ]; then
+    ufw default deny incoming
+    ufw default allow outgoing
+    ufw allow "${ssh_port}/tcp"
+    ufw allow 80/tcp
+    ufw allow 443/tcp
+    ufw allow 443/udp
+    ufw allow 8388/tcp
+    ufw allow 8388/udp
+    ufw allow 8444/udp
+    ufw allow 51821/udp
+    ufw allow 51822/udp
+    ufw --force enable
+else
+    echo 'Существующие правила UFW сохранены без изменений.'
+fi
 
 cert_dir="/etc/letsencrypt/live/$site_domain"
 certificate_ok=false
@@ -91,6 +96,47 @@ fi
 
 test -s "$cert_dir/fullchain.pem"
 test -s "$cert_dir/privkey.pem"
+'''
+
+
+PREINSTALL_BACKUP = r'''set -Eeuo pipefail
+umask 077
+install -d -m 0700 /var/backups/home-vpn
+python3 - <<'PY'
+import pathlib,sqlite3
+path=pathlib.Path('/etc/x-ui/x-ui.db')
+if path.is_file():
+ connection=sqlite3.connect('file:'+str(path)+'?mode=ro',uri=True)
+ result=connection.execute('PRAGMA integrity_check').fetchone()[0]
+ connection.close()
+ if result!='ok':raise SystemExit('3x-ui SQLite integrity_check: '+str(result))
+PY
+stamp=$(date -u +%Y%m%d-%H%M%S)
+archive="/var/backups/home-vpn/preinstall-${stamp}.tar.gz"
+items=()
+for item in etc/x-ui etc/nginx etc/letsencrypt etc/home-vpn etc/vpn-shop.env etc/vpn-bot.env etc/vpn-bot-admin.env usr/local/x-ui var/lib/vpn-shop var/lib/vpn-bot; do
+    [ -e "/$item" ] && items+=("$item")
+done
+[ "${#items[@]}" -gt 0 ] || { echo 'Нет данных для резервного копирования' >&2; exit 1; }
+tar -czf "$archive" -C / "${items[@]}"
+chmod 0600 "$archive"
+tar -tzf "$archive" >/dev/null
+sha256sum "$archive" > "${archive}.sha256"
+chmod 0600 "${archive}.sha256"
+sha256sum -c "${archive}.sha256" >/dev/null
+printf 'Проверенный архив перед установкой: %s\n' "$archive"
+'''
+
+
+RESET_EXISTING_STACK = r'''set -Eeuo pipefail
+systemctl disable --now x-ui nginx kit-sub vpn-shop vpn-bot vpn-bot-admin home-vpn-bot-egress 2>/dev/null || true
+rm -rf -- /etc/x-ui /usr/local/x-ui /etc/nginx /etc/kit /opt/vpn-shop /opt/vpn-bot /etc/home-vpn /var/lib/vpn-shop /var/lib/vpn-bot
+rm -f -- /usr/local/bin/kit /usr/local/bin/x-ui /usr/bin/x-ui /etc/vpn-shop.env /etc/vpn-bot.env /etc/vpn-bot-admin.env
+rm -f -- /etc/systemd/system/x-ui.service /etc/systemd/system/kit-sub.service /etc/systemd/system/vpn-shop.service /etc/systemd/system/vpn-bot.service /etc/systemd/system/vpn-bot-admin.service /etc/systemd/system/home-vpn-bot-egress.service
+rm -f -- /etc/systemd/system/home-vpn-*.service /etc/systemd/system/home-vpn-*.timer
+rm -f -- /etc/cron.d/x-ui /etc/cron.d/3x-ui-pro
+apt-get purge -y nginx nginx-common nginx-core nginx-full 2>/dev/null || true
+systemctl daemon-reload
 '''
 
 
@@ -174,11 +220,94 @@ def detected_ssh_port():
     return connection[3] if len(connection) == 4 and connection[3].isdigit() else "22"
 
 
+def existing_xui_detected():
+    return pathlib.Path("/etc/x-ui/x-ui.db").is_file() and (
+        pathlib.Path("/usr/local/x-ui/x-ui").is_file()
+        or run(["systemctl","is-active","--quiet","x-ui"],check=False).returncode==0
+    )
+
+
+def choose_xui_mode():
+    if not existing_xui_detected():
+        print("3x-ui не обнаружена: будет выполнена чистая установка.")
+        return "fresh"
+    print("\nОбнаружена существующая 3x-ui.")
+    print("  1 — сохранить панель, inbounds, клиентов, ссылки и текущие правила firewall")
+    print("  2 — чистая переустановка VPN-стека (удалит 3x-ui, клиентов и HOME-VPN после backup)")
+    choice=ask("Выберите вариант", "1")
+    if choice=="1":return "preserve"
+    if choice=="2":return "fresh"
+    raise SystemExit("Допустимы варианты 1 или 2")
+
+
+def find_preserved_vhost(domain, nginx_root=pathlib.Path("/etc/nginx")):
+    candidates = (
+        nginx_root / "sites-enabled" / domain,
+        nginx_root / "sites-available" / domain,
+        nginx_root / "conf.d" / f"{domain}.conf",
+    )
+    source = next((item.resolve() for item in candidates if item.exists()), None)
+    if source is None and nginx_root.is_dir():
+        pattern = re.compile(r"\bserver_name\s+" + re.escape(domain) + r"(?:\s|;)")
+        for item in nginx_root.glob("**/*"):
+            if not item.is_file():
+                continue
+            try:
+                text = item.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                continue
+            if pattern.search(text):
+                source = item.resolve()
+                break
+    if source is None:
+        raise RuntimeError(f"Не найден nginx vhost домена {domain}")
+    return source
+
+
+def preserve_preflight(site_domain, bot_enabled, nginx_root=pathlib.Path("/etc/nginx"),
+                       database=pathlib.Path("/etc/x-ui/x-ui.db")):
+    """Read-only compatibility check before touching an existing installation."""
+    import sqlite3
+
+    connection = sqlite3.connect("file:" + str(database) + "?mode=ro", uri=True)
+    try:
+        integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
+        if integrity != "ok":
+            raise RuntimeError("3x-ui SQLite integrity_check: " + str(integrity))
+        rows = connection.execute(
+            "SELECT protocol,enable,stream_settings FROM inbounds"
+        ).fetchall()
+        settings = dict(connection.execute("SELECT key,value FROM settings"))
+    finally:
+        connection.close()
+    if not any(bool(row[1]) for row in rows):
+        raise RuntimeError("В существующей 3x-ui нет активных inbounds")
+    if not str(settings.get("webBasePath") or "").strip("/"):
+        raise RuntimeError("В существующей 3x-ui не задан webBasePath")
+    if bot_enabled and not any(
+        bool(enabled) and str(protocol).lower() == "vless"
+        and json.loads(stream or "{}").get("network") == "xhttp"
+        for protocol, enabled, stream in rows
+    ):
+        raise RuntimeError("Для Telegram-бота нужен активный VLESS/XHTTP inbound")
+    vhost = find_preserved_vhost(site_domain, nginx_root)
+    text = vhost.read_text(encoding="utf-8")
+    marker = "include /etc/nginx/snippets/home-vpn-site.conf;"
+    if marker not in text:
+        if len(re.findall(r"\bserver\s*\{", text)) != 1:
+            raise RuntimeError("Vhost содержит несколько server-блоков; автоматическое изменение запрещено")
+        if re.search(r"\blocation\s+(?:\^~\s+|=\s+)?/\s*\{", text):
+            raise RuntimeError("Vhost уже содержит location /; автоматическое изменение запрещено")
+    return {"inbounds": len(rows), "vhost": str(vhost)}
+
+
 def build_topology(*, public_ip, site_domain, panel_domain, country, node_name,
-                   sni, bot_enabled, installer_url, installer_sha256, **_ignored):
+                   sni, bot_enabled, installer_url, installer_sha256,
+                   xui_install_mode="fresh", **_ignored):
     cert_dir = f"/etc/letsencrypt/live/{site_domain}"
     return {
         "mode": 3,
+        "xui_install_mode": xui_install_mode,
         "protocol_installer": {
             "url": validate_https_url(installer_url),
             "sha256": installer_sha256,
@@ -208,6 +337,7 @@ def build_topology(*, public_ip, site_domain, panel_domain, country, node_name,
 
 def collect_answers():
     print("\nHOME-VPN — локальная установка одной VPS\n")
+    xui_install_mode=choose_xui_mode()
     public_ip = str(ipaddress.IPv4Address(ask("Публичный IPv4 этой VPS")))
     ssh_port = ask("SSH-порт этой VPS", detected_ssh_port())
     if not ssh_port.isdigit() or not 1 <= int(ssh_port) <= 65535:
@@ -223,12 +353,12 @@ def collect_answers():
     node_name = ask("Название VPN-ноды", "Main VPN node")
     sni = validate_domain(ask("SNI маскировки", "dl.google.com"), "SNI")
     bot_enabled = ask_yes_no("Установить Telegram-бота?", True)
-    installer_url = validate_https_url(ask("HTTPS URL установщика 3x-ui/KIT", DEFAULT_KIT_URL))
-    installer_sha256 = ask("SHA-256 установщика", DEFAULT_KIT_SHA256).lower()
+    installer_url = validate_https_url(ask("HTTPS URL установщика 3x-ui/KIT", DEFAULT_KIT_URL)) if xui_install_mode=="fresh" else DEFAULT_KIT_URL
+    installer_sha256 = ask("SHA-256 установщика", DEFAULT_KIT_SHA256).lower() if xui_install_mode=="fresh" else DEFAULT_KIT_SHA256
     if not re.fullmatch(r"[0-9a-f]{64}", installer_sha256):
         raise SystemExit("SHA-256 должен содержать ровно 64 hex-символа")
     return {
-        "public_ip": public_ip, "ssh_port": ssh_port,
+        "public_ip": public_ip, "ssh_port": ssh_port,"xui_install_mode":xui_install_mode,
         "site_domain": site_domain, "panel_domain": panel_domain,
         "cert_email": cert_email, "country": country, "node_name": node_name,
         "sni": sni, "bot_enabled": bot_enabled,
@@ -266,6 +396,19 @@ def read_env(path):
     return values
 
 
+def existing_panel_details(plan_path):
+    try:
+        plan=json.loads(pathlib.Path(plan_path).read_text(encoding="utf-8"))
+        domain=plan["nodes"][0]["api_host"]
+        connection=__import__("sqlite3").connect("file:/etc/x-ui/x-ui.db?mode=ro",uri=True)
+        path=connection.execute("SELECT value FROM settings WHERE key='webBasePath'").fetchone()[0].strip("/")
+        user=connection.execute("SELECT username FROM users ORDER BY id LIMIT 1").fetchone()[0]
+        connection.close()
+        return "https://"+domain+"/"+path,user
+    except Exception:
+        return "не найден","сохранён прежний"
+
+
 def show_results(plan_path=DEFAULT_PLAN):
     site = read_env(pathlib.Path("/etc/vpn-shop.env"))
     bot = read_env(pathlib.Path("/etc/vpn-bot-admin.env"))
@@ -285,9 +428,10 @@ def show_results(plan_path=DEFAULT_PLAN):
         print("Панель бота:      ", public_url + bot_path)
         print("Логин панели бота:", bot.get("BOT_PANEL_USER", "не найден"))
         print("Пароль панели:    ", bot.get("BOT_PANEL_PASSWORD", "не найден"))
-    print("Панель 3x-ui:     ", xui.get("XUI_ACCESS_URL", "не найден"))
-    print("Логин 3x-ui:      ", xui.get("XUI_USERNAME", "не найден"))
-    print("Пароль 3x-ui:     ", xui.get("XUI_PASSWORD", "не найден"))
+    preserved_url,preserved_user=existing_panel_details(plan_path)
+    print("Панель 3x-ui:     ", xui.get("XUI_ACCESS_URL") or preserved_url)
+    print("Логин 3x-ui:      ", xui.get("XUI_USERNAME") or preserved_user)
+    print("Пароль 3x-ui:     ", xui.get("XUI_PASSWORD") or "сохранён прежний (хеш нельзя восстановить)")
     print("Локальный план:   ", plan_path)
     print("=" * 64)
     print("Сохраните эти данные в менеджере паролей и очистите scrollback терминала.")
@@ -309,6 +453,9 @@ def main():
     plan = build_topology(**answers)
     save_plan(plan, arguments.plan)
     validate_plan(arguments.plan)
+    if answers["xui_install_mode"] == "preserve":
+        report = preserve_preflight(answers["site_domain"], answers["bot_enabled"])
+        print(f"Read-only preflight: {report['inbounds']} inbounds; nginx vhost {report['vhost']}")
     if arguments.plan_only:
         print(f"План сохранён: {arguments.plan}\nVPS не изменялась.")
         return
@@ -316,13 +463,22 @@ def main():
     print("\nБудут установлены пакеты, UFW, TLS, 3x-ui, HOME-VPN и выбранные компоненты.")
     print(f"Сайт: https://{answers['site_domain']}")
     print(f"3x-ui: https://{answers['panel_domain']}")
+    print("Режим 3x-ui:","сохранение существующей конфигурации" if answers["xui_install_mode"]=="preserve" else "чистая установка")
     confirmation = input(f"Для продолжения введите {APPLY_CONFIRMATION!r}: ").strip()
     if confirmation != APPLY_CONFIRMATION:
         raise SystemExit("Установка отменена; сохранён только план")
 
+    if existing_xui_detected():
+        run(["bash","-s"],input_text=PREINSTALL_BACKUP,timeout=1800)
+    if answers["xui_install_mode"]=="fresh" and existing_xui_detected():
+        destructive=input("Для удаления 3x-ui и всех клиентов введите 'ERASE 3X-UI AND CLIENTS': ").strip()
+        if destructive!="ERASE 3X-UI AND CLIENTS":
+            raise SystemExit("Очистка отменена; существующая 3x-ui не изменена")
+        run(["bash","-s"],input_text=RESET_EXISTING_STACK,timeout=900)
+
     run(
         ["bash", "-s", "--", answers["site_domain"], answers["panel_domain"],
-         answers["cert_email"], answers["ssh_port"]],
+         answers["cert_email"], answers["ssh_port"],answers["xui_install_mode"]],
         input_text=PREPARE_SERVER, timeout=1800,
     )
     run([

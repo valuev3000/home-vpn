@@ -1,5 +1,5 @@
 [Unit]
-Description=Daily verified 3X-UI KIT backup
+Description=Daily verified 3x-ui backup
 
 [Timer]
 OnCalendar=*-*-* 03:35:00

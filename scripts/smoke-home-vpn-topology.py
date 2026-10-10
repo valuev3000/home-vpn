@@ -71,7 +71,8 @@ test ! -e /etc/sysctl.d/90-home-vpn-cascade.conf
     if mode==3:
         ssh(target,"set -Eeuo pipefail\n! systemctl is-active --quiet home-vpn-placeholder.service\ntest ! -e /etc/home-vpn/placeholder.html\n")
     for node in topology["nodes"]:
-        node_check="set -Eeuo pipefail\nsystemctl is-active --quiet x-ui nginx kit-sub home-vpn-kit-backup.timer\n"
+        services="x-ui nginx home-vpn-kit-backup.timer"+(" kit-sub" if topology.get("xui_install_mode","fresh")!="preserve" else "")
+        node_check="set -Eeuo pipefail\nsystemctl is-active --quiet "+services+"\n"
         if mode in (1,2):node_check+="systemctl is-active --quiet home-vpn-placeholder.service\n"
         ssh(node["ssh_host"],node_check)
 

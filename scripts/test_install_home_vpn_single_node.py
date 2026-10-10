@@ -1,5 +1,7 @@
 import importlib.util
+import json
 import pathlib
+import sqlite3
 import tempfile
 import unittest
 
@@ -59,14 +61,74 @@ class PlanTests(unittest.TestCase):
         self.assertNotIn("password", serialized)
         self.assertNotIn("token", serialized.replace("telegram_bot", ""))
 
+    def test_preserve_mode_is_written_to_plan(self):
+        plan=MODULE.build_topology(
+            public_ip="203.0.113.10",site_domain="vpn.example.com",panel_domain="panel.example.com",
+            country="DE",node_name="Primary",sni="dl.google.com",bot_enabled=False,
+            installer_url=MODULE.DEFAULT_KIT_URL,installer_sha256=MODULE.DEFAULT_KIT_SHA256,
+            xui_install_mode="preserve",
+        )
+        self.assertEqual("preserve",plan["xui_install_mode"])
+
     def test_server_setup_uses_requested_ssh_port_and_pinned_vpn_ports(self):
         script = MODULE.PREPARE_SERVER
         self.assertIn("ubuntu:22.04|ubuntu:24.04", script)
         self.assertIn("-checkend 604800", script)
         self.assertIn('ufw allow "${ssh_port}/tcp"', script)
+        self.assertIn('if [ "$xui_mode" = fresh ]',script)
         for port in (8388, 8444, 51821, 51822):
             self.assertIn(str(port), script)
         self.assertNotIn("PasswordAuthentication no", script)
+
+    def test_preserve_preflight_is_read_only_and_accepts_xhttp(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            database = root / "x-ui.db"
+            connection = sqlite3.connect(database)
+            connection.executescript("""
+                CREATE TABLE settings (key TEXT, value TEXT);
+                CREATE TABLE inbounds (protocol TEXT, enable INTEGER, stream_settings TEXT);
+                INSERT INTO settings VALUES ('webBasePath','hidden');
+            """)
+            connection.execute(
+                "INSERT INTO inbounds VALUES (?,?,?)",
+                ("vless", 1, json.dumps({"network": "xhttp"})),
+            )
+            connection.commit()
+            connection.close()
+            vhost = root / "sites-enabled" / "vpn.example.com"
+            vhost.parent.mkdir(parents=True)
+            vhost.write_text("server { server_name vpn.example.com; }\n", encoding="utf-8")
+            before = database.read_bytes()
+            result = MODULE.preserve_preflight(
+                "vpn.example.com", True, nginx_root=root, database=database,
+            )
+            self.assertEqual(1, result["inbounds"])
+            self.assertEqual(before, database.read_bytes())
+
+    def test_preserve_preflight_rejects_existing_root_location(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            database = root / "x-ui.db"
+            connection = sqlite3.connect(database)
+            connection.executescript("""
+                CREATE TABLE settings (key TEXT, value TEXT);
+                CREATE TABLE inbounds (protocol TEXT, enable INTEGER, stream_settings TEXT);
+                INSERT INTO settings VALUES ('webBasePath','hidden');
+                INSERT INTO inbounds VALUES ('vless',1,'{"network":"xhttp"}');
+            """)
+            connection.commit()
+            connection.close()
+            vhost = root / "sites-enabled" / "vpn.example.com"
+            vhost.parent.mkdir(parents=True)
+            vhost.write_text(
+                "server { server_name vpn.example.com; location / { return 200; } }\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RuntimeError, "location /"):
+                MODULE.preserve_preflight(
+                    "vpn.example.com", False, nginx_root=root, database=database,
+                )
 
 
 if __name__ == "__main__":
