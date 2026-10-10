@@ -102,23 +102,27 @@ test -s "$cert_dir/privkey.pem"
 PREINSTALL_BACKUP = r'''set -Eeuo pipefail
 umask 077
 install -d -m 0700 /var/backups/home-vpn
-python3 - <<'PY'
-import pathlib,sqlite3
+stage=$(mktemp -d /var/backups/home-vpn/.preinstall.XXXXXX)
+trap 'rm -rf -- "$stage"' EXIT
+tar -C / --exclude=etc/x-ui/x-ui.db --exclude=etc/x-ui/x-ui.db-wal --exclude=etc/x-ui/x-ui.db-shm \
+    -cf - etc/x-ui etc/nginx etc/letsencrypt usr/local/x-ui 2>/dev/null | tar -C "$stage" -xf -
+for item in etc/home-vpn etc/vpn-shop.env etc/vpn-bot.env etc/vpn-bot-admin.env var/lib/vpn-shop var/lib/vpn-bot; do
+    [ ! -e "/$item" ] || tar -C / -cf - "$item" | tar -C "$stage" -xf -
+done
+mkdir -p "$stage/etc/x-ui"
+python3 - "$stage/etc/x-ui/x-ui.db" <<'PY'
+import pathlib,sqlite3,sys
 path=pathlib.Path('/etc/x-ui/x-ui.db')
-if path.is_file():
- connection=sqlite3.connect('file:'+str(path)+'?mode=ro',uri=True)
- result=connection.execute('PRAGMA integrity_check').fetchone()[0]
- connection.close()
- if result!='ok':raise SystemExit('3x-ui SQLite integrity_check: '+str(result))
+if not path.is_file():raise SystemExit('/etc/x-ui/x-ui.db не найдена')
+source=sqlite3.connect('file:'+str(path)+'?mode=ro',uri=True)
+target=sqlite3.connect(sys.argv[1]);source.backup(target);target.close();source.close()
+check=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)
+result=check.execute('PRAGMA integrity_check').fetchone()[0];check.close()
+if result!='ok':raise SystemExit('3x-ui SQLite integrity_check: '+str(result))
 PY
 stamp=$(date -u +%Y%m%d-%H%M%S)
 archive="/var/backups/home-vpn/preinstall-${stamp}.tar.gz"
-items=()
-for item in etc/x-ui etc/nginx etc/letsencrypt etc/home-vpn etc/vpn-shop.env etc/vpn-bot.env etc/vpn-bot-admin.env usr/local/x-ui var/lib/vpn-shop var/lib/vpn-bot; do
-    [ -e "/$item" ] && items+=("$item")
-done
-[ "${#items[@]}" -gt 0 ] || { echo 'Нет данных для резервного копирования' >&2; exit 1; }
-tar -czf "$archive" -C / "${items[@]}"
+tar -czf "$archive" -C "$stage" .
 chmod 0600 "$archive"
 tar -tzf "$archive" >/dev/null
 sha256sum "$archive" > "${archive}.sha256"

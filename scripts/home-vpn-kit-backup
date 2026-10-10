@@ -17,11 +17,20 @@ else
   [[ -s /etc/x-ui/x-ui.db ]] || { echo "/etc/x-ui/x-ui.db not found" >&2; exit 1; }
   stamp=$(date -u +%Y%m%d-%H%M%S)
   archive="/root/xui-backup-${stamp}.tar.gz"
-  items=(etc/x-ui/x-ui.db)
-  [[ -f /etc/x-ui/install-result.env ]] && items+=(etc/x-ui/install-result.env)
-  [[ -f /etc/systemd/system/x-ui.service ]] && items+=(etc/systemd/system/x-ui.service)
-  [[ -d /etc/nginx ]] && items+=(etc/nginx)
-  tar -czf "$archive" -C / "${items[@]}"
+  stage=$(mktemp -d)
+  trap 'rm -rf -- "$stage"' EXIT
+  mkdir -p "$stage/etc/x-ui"
+  python3 - "$stage/etc/x-ui/x-ui.db" <<'PY'
+import sqlite3,sys
+source=sqlite3.connect('file:/etc/x-ui/x-ui.db?mode=ro',uri=True)
+target=sqlite3.connect(sys.argv[1]);source.backup(target);target.close();source.close()
+PY
+  for item in etc/x-ui/install-result.env etc/systemd/system/x-ui.service etc/nginx; do
+    [[ ! -e /$item ]] || tar -C / -cf - "$item" | tar -C "$stage" -xf -
+  done
+  tar -czf "$archive" -C "$stage" .
+  rm -rf -- "$stage"
+  trap - EXIT
   chmod 0600 "$archive"
 fi
 
