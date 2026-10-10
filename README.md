@@ -5,10 +5,30 @@
 
 Самостоятельно размещаемый кабинет для 3x-ui: сайт пользователей, тарифы, заказы, подписки, Telegram-бот, уведомления, тикеты, мониторинг узлов и административная панель.
 
-Полная пошаговая инструкция: [docs/installation.md](docs/installation.md).
+Полная пошаговая инструкция для чистой однонодовой установки (DNS, TLS,
+firewall, Telegram и проверка): [docs/installation.md](docs/installation.md).
 Резервное копирование и восстановление: [docs/backup-and-restore.md](docs/backup-and-restore.md).
 Схема 11 подключений 3x-ui: [docs/3x-ui-protocols.md](docs/3x-ui-protocols.md).
 Выбор одной из трёх многосерверных архитектур: [docs/topology-installation.md](docs/topology-installation.md).
+
+## Рекомендуемая чистая установка
+
+Для новой VPS используйте topology installer: он устанавливает зафиксированный
+по SHA-256 набор 3x-ui, сайт, панели, Telegram-бот, резервное копирование и
+проверяет публичный `/health`. Начните с подготовки DNS и TLS по
+[пошаговой инструкции](docs/installation.md).
+
+Кратко, после создания локального плана без секретов:
+
+```bash
+git clone https://github.com/valuev3000/home-vpn.git
+cd home-vpn
+python3 scripts/install-home-vpn-topology.py --config topology.local.json
+python3 scripts/install-home-vpn-topology.py \
+  --config topology.local.json \
+  --apply --confirm 'INSTALL HOME VPN TOPOLOGY'
+python3 scripts/smoke-home-vpn-topology.py --config topology.local.json
+```
 
 ## Установка с выбором компонента
 
