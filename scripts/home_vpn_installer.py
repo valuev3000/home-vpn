@@ -50,7 +50,7 @@ def install_component_files(component, root=SOURCE_ROOT):
             copy_owned(root/"scripts"/source,target,mode)
         for name in ("home-vpn-healthcheck.service","home-vpn-healthcheck.timer","home-vpn-system-check.service","home-vpn-system-check.timer","home-vpn-site-backup.service","home-vpn-site-backup.timer"):
             copy_owned(root/"scripts"/name,pathlib.Path("/etc/systemd/system")/name)
-        if pathlib.Path("/usr/local/bin/kit").exists():
+        if pathlib.Path("/usr/local/bin/kit").exists() or pathlib.Path("/etc/x-ui/x-ui.db").exists():
             copy_owned(root/"scripts/home-vpn-kit-backup","/usr/local/sbin/home-vpn-kit-backup",0o700)
             for name in ("home-vpn-kit-backup.service","home-vpn-kit-backup.timer"):copy_owned(root/"scripts"/name,pathlib.Path("/etc/systemd/system")/name)
     elif component=="bot":

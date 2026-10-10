@@ -7,9 +7,11 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import urllib.parse
 
 
@@ -545,6 +547,158 @@ def show_results(plan_path=DEFAULT_PLAN):
     print("Сохраните эти данные в менеджере паролей и очистите scrollback терминала.")
 
 
+def home_vpn_installed():
+    return pathlib.Path("/etc/vpn-shop.env").is_file() or pathlib.Path("/etc/home-vpn/config.json").is_file()
+
+
+def choose_action():
+    state = "HOME-VPN обнаружен" if home_vpn_installed() else "HOME-VPN не установлен"
+    print(f"\n{state}. Выберите действие:")
+    print("  1 — установить или повторно настроить")
+    print("  2 — обновить HOME-VPN, сохранив настройки и пользователей")
+    print("  3 — удалить HOME-VPN, сохранив 3x-ui и её клиентов")
+    print("  0 — выйти без изменений")
+    choice = ask("Действие", "2" if home_vpn_installed() else "1")
+    actions = {"1": "install", "2": "update", "3": "remove", "0": "exit"}
+    if choice not in actions:
+        raise SystemExit("Допустимы варианты 0, 1, 2 или 3")
+    return actions[choice]
+
+
+def deploy_current_source():
+    destination = pathlib.Path("/opt/home-vpn-source")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = pathlib.Path(tempfile.mkdtemp(prefix=".home-vpn-source.", dir=destination.parent))
+    previous = destination.with_name(destination.name + ".previous")
+    try:
+        tracked = run(
+            ["git", "-C", ROOT, "ls-files", "-z"], capture=True, timeout=60,
+        ).stdout.split("\0")
+        for relative in filter(None, tracked):
+            relative_path = pathlib.PurePosixPath(relative)
+            if relative_path.is_absolute() or ".." in relative_path.parts:
+                raise RuntimeError("Git вернул небезопасный путь: " + relative)
+            source = ROOT / relative_path
+            target = temporary / relative_path
+            if source.is_file():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+        if previous.exists():shutil.rmtree(previous)
+        if destination.exists():os.replace(destination, previous)
+        os.replace(temporary, destination)
+        if previous.exists():shutil.rmtree(previous)
+    except Exception:
+        if not destination.exists() and previous.exists():os.replace(previous, destination)
+        raise
+    finally:
+        if temporary.exists():shutil.rmtree(temporary)
+    return destination
+
+
+def manager_command(source, action, components, purge=False, confirmation=""):
+    command = [sys.executable, source / "scripts/home-vpn-manager.py", action, *components]
+    if purge:command.append("--purge-data")
+    environment = os.environ.copy();environment["HOME_VPN_SOURCE_ROOT"] = str(source)
+    return subprocess.run(
+        command, input=(confirmation + "\n") if confirmation else None,
+        text=True, check=True, env=environment,
+    )
+
+
+def installed_managed_components():
+    components = []
+    if pathlib.Path("/etc/vpn-shop.env").is_file():components.append("site")
+    if pathlib.Path("/etc/vpn-bot.env").is_file():components.append("bot")
+    if pathlib.Path("/etc/systemd/system/home-vpn-placeholder.service").is_file():components.append("placeholder")
+    if pathlib.Path("/etc/home-vpn-mail").is_dir():components.append("mail")
+    return components
+
+
+def backup_before_lifecycle_change():
+    if not existing_xui_detected():return
+    candidates = ("vpn-shop", "vpn-bot", "vpn-bot-admin", "home-vpn-bot-egress")
+    active = [
+        service for service in candidates
+        if run(["systemctl", "is-active", "--quiet", service], check=False).returncode == 0
+    ]
+    try:
+        if active:run(["systemctl", "stop", *active], timeout=120)
+        run(["bash", "-s"], input_text=PREINSTALL_BACKUP, timeout=1800)
+    finally:
+        if active:run(["systemctl", "start", *active], timeout=120, check=False)
+
+
+def update_home_vpn(plan_path=DEFAULT_PLAN):
+    if not home_vpn_installed():
+        raise SystemExit("HOME-VPN не установлен; выберите действие 1")
+    backup_before_lifecycle_change()
+    source = deploy_current_source()
+    components = [name for name in installed_managed_components() if name in ("site", "bot", "placeholder")]
+    if not components:raise SystemExit("Не найдены компоненты HOME-VPN для обновления")
+    manager_command(source, "update", components)
+    if pathlib.Path("/usr/local/sbin/home-vpn-setup").is_file():
+        run(["/usr/local/sbin/home-vpn-setup", "validate", "--config", "/etc/home-vpn/config.json"])
+        run(["/usr/local/sbin/home-vpn-setup", "doctor", "--config", "/etc/home-vpn/config.json"])
+    if pathlib.Path(plan_path).is_file():run([sys.executable, SMOKE_TEST, "--config", plan_path])
+    show_results(plan_path)
+    print("\nHOME-VPN обновлён; базы, пароли, 3x-ui и её клиенты сохранены.")
+
+
+def restore_preserved_nginx_route():
+    marker = "include /etc/nginx/snippets/home-vpn-site.conf;"
+    for source in pathlib.Path("/etc/nginx").glob("sites-available/*"):
+        if not source.is_file():continue
+        text = source.read_text(encoding="utf-8")
+        if marker not in text:continue
+        backup = source.with_name(source.name + ".pre-home-vpn")
+        if not backup.is_file():
+            raise RuntimeError(f"Нет исходного Nginx vhost для безопасного удаления: {backup}")
+        original = backup.read_text(encoding="utf-8")
+        original_includes = re.findall(r"\binclude\s+[^;]+;", original)
+        replacement = next((item for item in original_includes if item not in text), "")
+        if not replacement:
+            raise RuntimeError("Не удалось восстановить исходный include Nginx")
+        updated = text.replace(marker, replacement, 1)
+        temporary = source.with_name(source.name + ".remove-home-vpn")
+        temporary.write_text(updated, encoding="utf-8");temporary.chmod(0o644)
+        os.replace(temporary, source)
+        result = run(["nginx", "-t"], capture=True, check=False)
+        if result.returncode:
+            source.write_text(text, encoding="utf-8");source.chmod(0o644)
+            raise RuntimeError(result.stderr.strip() or "nginx -t завершился ошибкой")
+        run(["systemctl", "reload", "nginx"])
+    snippet = pathlib.Path("/etc/nginx/snippets/home-vpn-site.conf")
+    referenced = any(marker in item.read_text(encoding="utf-8", errors="ignore") for item in pathlib.Path("/etc/nginx").glob("sites-available/*") if item.is_file())
+    if not referenced:snippet.unlink(missing_ok=True)
+
+
+def remove_home_vpn():
+    if not home_vpn_installed():raise SystemExit("HOME-VPN не установлен")
+    backup_before_lifecycle_change()
+    print("3x-ui, её inbounds и пользовательские клиенты удаляться не будут.")
+    if input("Для удаления HOME-VPN введите 'DELETE HOME-VPN': ").strip() != "DELETE HOME-VPN":
+        raise SystemExit("Удаление отменено")
+    purge = ask_yes_no("Удалить также базы HOME-VPN и его настройки?", False)
+    restore_preserved_nginx_route()
+    source = deploy_current_source()
+    components = installed_managed_components()
+    if components:manager_command(source, "remove", components, purge, "DELETE HOME-VPN")
+    for path in (
+        "/opt/home-vpn-source", "/usr/local/share/home-vpn",
+        "/usr/local/sbin/home-vpn-manager", "/usr/local/sbin/home-vpn-setup",
+        "/usr/local/sbin/home-vpn-xui", "/usr/local/sbin/home-vpn-components",
+        "/usr/local/sbin/home-vpn-state-backup", "/usr/local/sbin/home_vpn_config.py",
+        "/usr/local/sbin/home_vpn_installer.py",
+        "/etc/letsencrypt/renewal-hooks/deploy/home-vpn-services",
+    ):
+        item = pathlib.Path(path)
+        if item.is_dir() and not item.is_symlink():shutil.rmtree(item)
+        else:item.unlink(missing_ok=True)
+    if purge:
+        pathlib.Path("/root/home-vpn-topology.json").unlink(missing_ok=True)
+    print("HOME-VPN удалён. 3x-ui, VPN-подключения, сертификаты и проверенные backup сохранены.")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", type=pathlib.Path, default=DEFAULT_PLAN,
@@ -555,9 +709,16 @@ def main():
                         help="домен сайта для новой или нестандартной конфигурации")
     parser.add_argument("--panel-domain", default="",
                         help="домен 3x-ui для новой или нестандартной конфигурации")
+    parser.add_argument("--action", choices=("install", "update", "remove"),
+                        help="выбрать действие без стартового меню")
     arguments = parser.parse_args()
     if os.geteuid() != 0:
         raise SystemExit("Запустите мастер от root: sudo bash install-single-node.sh")
+
+    action = arguments.action or choose_action()
+    if action == "exit":return
+    if action == "update":update_home_vpn(arguments.plan);return
+    if action == "remove":remove_home_vpn();return
 
     answers = collect_answers(arguments.site_domain, arguments.panel_domain)
     check_dns(answers["site_domain"], answers["public_ip"])
@@ -580,8 +741,7 @@ def main():
     if confirmation != APPLY_CONFIRMATION:
         raise SystemExit("Установка отменена; сохранён только план")
 
-    if existing_xui_detected():
-        run(["bash","-s"],input_text=PREINSTALL_BACKUP,timeout=1800)
+    if existing_xui_detected():backup_before_lifecycle_change()
     if answers["xui_install_mode"]=="fresh" and existing_xui_detected():
         destructive=input("Для удаления 3x-ui и всех клиентов введите 'ERASE 3X-UI AND CLIENTS': ").strip()
         if destructive!="ERASE 3X-UI AND CLIENTS":

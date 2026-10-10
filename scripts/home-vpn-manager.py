@@ -103,7 +103,7 @@ def update_site():
     if not installed()["site"]: raise RuntimeError("Сайт ещё не установлен")
     install_component_files("site",ROOT)
     run("systemctl","daemon-reload");run("systemctl","restart","vpn-shop");run("systemctl","enable","--now","home-vpn-site-backup.timer")
-    if pathlib.Path("/usr/local/bin/kit").exists():run("systemctl","enable","--now","home-vpn-kit-backup.timer")
+    if pathlib.Path("/usr/local/bin/kit").exists() or pathlib.Path("/etc/x-ui/x-ui.db").exists():run("systemctl","enable","--now","home-vpn-kit-backup.timer")
 
 
 def update_bot():

@@ -93,6 +93,15 @@ class ValidationTests(unittest.TestCase):
 
 
 class PlanTests(unittest.TestCase):
+    def test_lifecycle_menu_supports_install_update_and_remove(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('"1": "install"', source)
+        self.assertIn('"2": "update"', source)
+        self.assertIn('"3": "remove"', source)
+        self.assertIn("DELETE HOME-VPN", source)
+        self.assertIn("3x-ui, её inbounds и пользовательские клиенты удаляться не будут", source)
+        self.assertIn('"ls-files", "-z"', source)
+
     def test_reads_only_explicit_env_assignments(self):
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory) / "service.env"

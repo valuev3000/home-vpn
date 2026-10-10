@@ -18,17 +18,19 @@ firewall, Telegram и проверка): [docs/installation.md](docs/installatio
 Telegram и учётные данные, а затем установит зафиксированный по SHA-256 набор
 3x-ui, сайт, панели, резервное копирование и проверит публичный `/health`:
 
+Одна команда для установки, обновления или удаления:
+
 ```bash
-wget -qO home-vpn-install.sh \
-  https://raw.githubusercontent.com/valuev3000/home-vpn/main/install-single-node.sh
-less home-vpn-install.sh
-sudo bash home-vpn-install.sh \
-  --site-domain vpn.example.com \
-  --panel-domain panel.example.com
+curl -fsSLo /tmp/home-vpn-install.sh https://raw.githubusercontent.com/valuev3000/home-vpn/main/install-single-node.sh && sudo bash /tmp/home-vpn-install.sh
 ```
 
+Мастер покажет меню действия. Для новой VPS домены можно передать флагами
+`--site-domain vpn.example.com --panel-domain panel.example.com`; если их нет,
+мастер запросит домены только после неудачного автоопределения.
+
 На VPS с существующей 3x-ui оба домена определяются из её настроек и активных
-Nginx vhost, поэтому флаги доменов можно не указывать.
+Nginx vhost, поэтому флаги доменов обычно не нужны. Обновление сохраняет базы,
+пароли и пользователей; удаление HOME-VPN не удаляет 3x-ui и её клиентов.
 
 DNS A-записи сайта и панели должны заранее указывать на VPS. Полный порядок и
 режим `--plan-only`: [docs/installation.md](docs/installation.md).

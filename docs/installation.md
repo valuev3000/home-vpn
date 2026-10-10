@@ -11,16 +11,16 @@
 ## Быстрая интерактивная установка на VPS
 
 Сначала направьте два DNS-имени на публичный IPv4 новой VPS. Затем войдите на
-неё как `root`, скачайте скрипт и просмотрите его перед запуском:
+неё как `root` и запустите единую команду:
 
 ```bash
-wget -qO home-vpn-install.sh \
-  https://raw.githubusercontent.com/valuev3000/home-vpn/main/install-single-node.sh
-less home-vpn-install.sh
-bash home-vpn-install.sh \
-  --site-domain vpn.example.com \
-  --panel-domain panel.example.com
+curl -fsSLo /tmp/home-vpn-install.sh https://raw.githubusercontent.com/valuev3000/home-vpn/main/install-single-node.sh && bash /tmp/home-vpn-install.sh
 ```
+
+Стартовое меню предлагает установить/повторно настроить, обновить или удалить
+HOME-VPN. Обновление не меняет базы, секреты и 3x-ui. Перед обновлением и
+удалением создаётся проверенный backup. Удаление требует фразу
+`DELETE HOME-VPN` и сохраняет 3x-ui, её inbounds, клиентов, TLS и архивы.
 
 Как и установщик `3x-ui-pro`, мастер выполняется непосредственно на VPS. Он
 интерактивно запросит:
