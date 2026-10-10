@@ -27,5 +27,10 @@ class SmokePlanTests(unittest.TestCase):
             result=subprocess.run(["python3",str(SCRIPT),"--config",str(path),"--plan-only"],text=True,capture_output=True)
         self.assertNotEqual(0,result.returncode)
 
+    def test_local_transport_does_not_require_sshd(self):
+        namespace={}
+        exec(SCRIPT.read_text(encoding="utf-8").replace("if __name__==\"__main__\":main()", ""),namespace)
+        self.assertEqual("local-ok",namespace["ssh"]("local","printf local-ok"))
+
 
 if __name__=="__main__":unittest.main()

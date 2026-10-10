@@ -14,7 +14,8 @@ def run(arguments,input_text=None):
 
 
 def ssh(target,script):
-    result=run(["ssh","--",target,"bash","-s"],script)
+    command=["bash","-s"] if target=="local" else ["ssh","--",target,"bash","-s"]
+    result=run(command,script)
     if result.returncode:raise RuntimeError(f"{target}: {result.stderr.strip() or result.stdout.strip()}")
     return result.stdout
 
@@ -28,7 +29,10 @@ def smoke(topology):
     mode=int(topology["mode"]);site=topology["site"];target=site["ssh_host"]
     check_public(site["public_url"])
     base=r'''set -Eeuo pipefail
-systemctl is-active --quiet vpn-shop vpn-bot vpn-bot-admin home-vpn-bot-egress
+systemctl is-active --quiet vpn-shop
+'''
+    if bool((topology.get("telegram_bot") or {}).get("enabled",True)):
+        base+=r'''systemctl is-active --quiet vpn-bot vpn-bot-admin home-vpn-bot-egress
 ss -lntH | grep -Eq '127\.0\.0\.1:8080|\[::1\]:8080'
 ss -lntH | grep -Eq '127\.0\.0\.1:8090|\[::1\]:8090'
 ! ss -lntH | grep -Eq '0\.0\.0\.0:8090|\[::\]:8090'
@@ -46,6 +50,9 @@ for line in pathlib.Path('/etc/vpn-bot.env').read_text().splitlines():
 assert values['SHOP_API_URL'].split('://',1)[-1].split(':',1)[0] in ('127.0.0.1','localhost','[::1]')
 assert values['TELEGRAM_PROXY_URL'].startswith('http://127.0.0.1:') or values['TELEGRAM_PROXY_URL'].startswith('http://[::1]:')
 PY
+'''
+    else:
+        base+=r'''ss -lntH | grep -Eq '127\.0\.0\.1:8080|\[::1\]:8080'
 '''
     ssh(target,base)
     cascade=r'''set -Eeuo pipefail

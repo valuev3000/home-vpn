@@ -43,6 +43,8 @@ def run(arguments, *, input_text=None, capture=False, timeout=None):
 
 def ssh_command(target, arguments, *, input_text=None, capture=False, timeout=None):
     """Run an argv-safe command through OpenSSH's unavoidable remote shell."""
+    if target == "local":
+        return run(arguments, input_text=input_text, capture=capture, timeout=timeout)
     command = shlex.join([str(item) for item in arguments])
     return run(
         ["ssh", "--", target, command], input_text=input_text,
@@ -266,7 +268,7 @@ def show_plan(topology):
 def check_servers(topology):
     targets = {topology["site"]["ssh_host"]} | {node["ssh_host"] for node in topology["nodes"]}
     for target in sorted(targets):
-        result = run(["ssh", "--", target, "id", "-u"], capture=True)
+        result = ssh_command(target, ["id", "-u"], capture=True)
         if result.stdout.strip() != "0":
             raise RuntimeError(f"{target}: для установки нужен root SSH")
 
@@ -297,6 +299,10 @@ def build_source_archive(target):
 
 
 def deploy_source(target, archive):
+    if target == "local":
+        run(["install", "-d", "-m", "0750", "/opt/home-vpn-source"])
+        run(["tar", "-xzf", archive, "-C", "/opt/home-vpn-source"])
+        return
     remote = f"/tmp/home-vpn-source-{os.getpid()}.tar.gz"
     run(["scp", "--", archive, f"{target}:{remote}"])
     try:
@@ -325,6 +331,9 @@ def download_protocol_installer(target, topology):
 
 
 def push_file(target, source, destination, mode):
+    if target == "local":
+        run(["install", "-m", f"{mode:o}", source, destination])
+        return
     remote = f"/tmp/home-vpn-{os.getpid()}-{pathlib.Path(source).name}"
     run(["scp", "--", source, f"{target}:{remote}"])
     try:
@@ -649,6 +658,8 @@ find /usr/local/x-ui/bin /opt -maxdepth 4 -type f -name 'xray*' -perm /111 2>/de
     source_binary = ssh_script(source, locate, capture=True).stdout.strip().splitlines()
     if not source_binary:
         raise RuntimeError("На VPN-ноде не найден Xray")
+    if source == "local" and central == "local":
+        return source_binary[-1]
     with tempfile.TemporaryDirectory(prefix="home-vpn-xray-") as directory:
         local = pathlib.Path(directory) / "xray"
         run(["scp", f"{source}:{source_binary[-1]}", local])

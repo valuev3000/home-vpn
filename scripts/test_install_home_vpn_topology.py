@@ -36,6 +36,12 @@ def topology(mode=1, nodes=1):
 
 
 class TopologyValidationTests(unittest.TestCase):
+    def test_local_target_is_valid_for_single_server(self):
+        value = topology(3)
+        value["site"]["ssh_host"] = "local"
+        value["nodes"][0]["ssh_host"] = "local"
+        MODULE.validate_topology(value)
+
     def test_direct_allows_multiple_nodes(self):
         MODULE.validate_topology(topology(1, 2))
 
@@ -83,6 +89,10 @@ class TopologyValidationTests(unittest.TestCase):
 
 
 class GeneratedConfigurationTests(unittest.TestCase):
+    def test_local_ssh_command_runs_without_openssh(self):
+        result = MODULE.ssh_command("local", ["python3", "-c", "print(123)"], capture=True)
+        self.assertEqual("123", result.stdout.strip())
+
     def test_placeholder_is_never_installed_on_primary_site(self):
         direct = topology(1, 2)
         self.assertEqual(2, len(MODULE.placeholder_nodes(direct)))

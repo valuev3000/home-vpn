@@ -13,12 +13,23 @@ firewall, Telegram и проверка): [docs/installation.md](docs/installatio
 
 ## Рекомендуемая чистая установка
 
-Для новой VPS используйте topology installer: он устанавливает зафиксированный
-по SHA-256 набор 3x-ui, сайт, панели, Telegram-бот, резервное копирование и
-проверяет публичный `/health`. Начните с подготовки DNS и TLS по
-[пошаговой инструкции](docs/installation.md).
+Для одной новой VPS запустите локальный интерактивный мастер непосредственно на
+сервере. Он запросит IP, SSH-порт, оба домена, email TLS, параметры ноды,
+Telegram и учётные данные, а затем установит зафиксированный по SHA-256 набор
+3x-ui, сайт, панели, резервное копирование и проверит публичный `/health`:
 
-Кратко, после создания локального плана без секретов:
+```bash
+wget -qO home-vpn-install.sh \
+  https://raw.githubusercontent.com/valuev3000/home-vpn/main/install-single-node.sh
+less home-vpn-install.sh
+sudo bash home-vpn-install.sh
+```
+
+DNS A-записи сайта и панели должны заранее указывать на VPS. Полный порядок и
+режим `--plan-only`: [docs/installation.md](docs/installation.md).
+
+Для нескольких серверов topology installer по-прежнему запускается с рабочей
+станции после создания локального плана без секретов:
 
 ```bash
 git clone https://github.com/valuev3000/home-vpn.git
