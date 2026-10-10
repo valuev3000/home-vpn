@@ -13,6 +13,17 @@ Restart=on-failure
 RestartSec=3
 # The panel may invoke one strictly allowlisted root helper through sudo.
 NoNewPrivileges=false
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/etc/vpn-bot.env /etc/vpn-bot-menu.json /var/lib/vpn-bot
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

@@ -57,6 +57,30 @@ class TopologyValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "без http"):
             MODULE.validate_topology(value)
 
+    def test_ssh_target_cannot_inject_openssh_options(self):
+        value = topology()
+        value["site"]["ssh_host"] = "-oProxyCommand=touch-pwned"
+        with self.assertRaisesRegex(SystemExit, "недопустимый SSH-адрес"):
+            MODULE.validate_topology(value)
+
+    def test_public_url_cannot_inject_nginx_directives(self):
+        value = topology()
+        value["site"]["public_url"] = "https://vpn.example.test;return 200"
+        with self.assertRaisesRegex(SystemExit, "credentials, path, query"):
+            MODULE.validate_topology(value)
+
+    def test_api_host_must_be_a_dns_name(self):
+        value = topology()
+        value["nodes"][0]["api_host"] = "https://panel.example.test/path"
+        with self.assertRaisesRegex(SystemExit, "api_host"):
+            MODULE.validate_topology(value)
+
+    def test_telegram_bot_can_be_disabled(self):
+        value = topology()
+        value["telegram_bot"] = {"enabled": False}
+        MODULE.validate_topology(value)
+        self.assertFalse(MODULE.bot_enabled(value))
+
 
 class GeneratedConfigurationTests(unittest.TestCase):
     def test_placeholder_is_never_installed_on_primary_site(self):
@@ -104,6 +128,17 @@ class GeneratedConfigurationTests(unittest.TestCase):
         self.assertNotIn("config/config.json", names)
         self.assertIn("config/config.example.json", names)
 
+    def test_source_archive_excludes_arbitrary_untracked_file(self):
+        secret = MODULE.ROOT / "credentials-untracked-test.json"
+        secret.write_text('{"secret":"must-not-deploy"}', encoding="utf-8")
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                archive = pathlib.Path(directory) / "source.tar.gz"
+                MODULE.build_source_archive(archive)
+                with tarfile.open(archive) as bundle:names=set(bundle.getnames())
+            self.assertNotIn("credentials-untracked-test.json", {name.removeprefix("./") for name in names})
+        finally:secret.unlink(missing_ok=True)
+
     def test_each_node_has_a_distinct_token_variable(self):
         value = topology(1, 2)
         inventories = {}
@@ -144,6 +179,20 @@ class GeneratedConfigurationTests(unittest.TestCase):
         settings = __import__("json").loads(second["settings"])
         self.assertEqual([{"dest": 8080, "xver": 0}], settings["fallbacks"])
         self.assertNotIn("id", second)
+
+    def test_mode3_kit_nginx_routes_site_by_sni(self):
+        site = topology(3)["site"]
+        site.update({"tls_cert": "/etc/letsencrypt/live/vpn.example.test/fullchain.pem", "tls_key": "/etc/letsencrypt/live/vpn.example.test/privkey.pem"})
+        config = MODULE.mode3_nginx_config(site)
+        self.assertIn("server_name vpn.example.test;", config)
+        self.assertIn("proxy_pass http://127.0.0.1:8080;", config)
+        self.assertIn("listen 127.0.0.1:10446 ssl http2 proxy_protocol;", config)
+
+    def test_tls_path_cannot_inject_nginx_directives(self):
+        value = topology()
+        value["site"].update({"tls_cert": "/tmp/cert.pem;return 200", "tls_key": "/tmp/key.pem"})
+        with self.assertRaisesRegex(SystemExit, "безопасный абсолютный путь"):
+            MODULE.validate_topology(value)
 
     def test_cascade_cleanup_is_project_scoped_and_restores_forwarding(self):
         script = MODULE.cascade_cleanup_script()

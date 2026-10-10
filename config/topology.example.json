@@ -4,6 +4,9 @@
     "url": "https://downloads.example.com/3x-ui-protocol-installer.sh",
     "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
   },
+  "telegram_bot": {
+    "enabled": true
+  },
   "telegram_egress": {
     "listen": "127.0.0.1",
     "port": 18080,
@@ -25,6 +28,7 @@
       "flag": "🇩🇪",
       "ssh_host": "root@vpn-node-1.example.com",
       "address": "10.10.0.11",
+      "api_host": "panel-node1.internal.example.com",
       "public_host": "node1.vpn.my.domain.ru",
       "ingress_address": "",
       "sni": "dl.google.com",

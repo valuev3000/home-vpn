@@ -4,7 +4,6 @@
 import json
 import pathlib
 import shutil
-import ssl
 import subprocess
 import urllib.parse
 import urllib.request
@@ -32,6 +31,7 @@ def removal_plan(component, purge=False):
 def copy_owned(source, target, mode=0o644):
     """Copy a project-owned file with deterministic target permissions."""
     target=pathlib.Path(target);shutil.copy2(source,target);os.chmod(target,mode)
+    if os.geteuid()==0:os.chown(target,0,0)
 
 
 def install_component_files(component, root=SOURCE_ROOT):
@@ -74,7 +74,7 @@ def cleanup_bot_egress_clients(ownership_path=pathlib.Path("/etc/home-vpn/bot-eg
         token=environment.get(str(item.get("token_env") or ""),"");panel_url=str(item.get("panel_url") or "").rstrip("/")
         if not token or not panel_url:continue
         request=urllib.request.Request(panel_url+"/panel/api/clients/del/"+urllib.parse.quote(email),data=b"{}",method="POST",headers={"Authorization":"Bearer "+token,"Content-Type":"application/json"})
-        with urllib.request.urlopen(request,timeout=20,context=ssl._create_unverified_context()) as response:result=json.load(response)
+        with urllib.request.urlopen(request,timeout=20) as response:result=json.load(response)
         if result.get("success",True):removed.append(email)
     return removed
 

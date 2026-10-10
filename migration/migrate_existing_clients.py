@@ -9,7 +9,6 @@ report.
 import argparse
 import json
 import os
-import ssl
 import sys
 import time
 import urllib.error
@@ -38,8 +37,9 @@ def request_json(base, token, method, path, body=None, verify_tls=True, api_key=
         headers=headers,
         method=method,
     )
-    context = None if verify_tls else ssl._create_unverified_context()
-    with urllib.request.urlopen(request, context=context, timeout=30) as response:
+    if not verify_tls:
+        raise ValueError("verify_tls=false больше не поддерживается; установите доверенный CA")
+    with urllib.request.urlopen(request, timeout=30) as response:
         return json.loads(response.read())
 
 

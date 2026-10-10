@@ -28,5 +28,11 @@ class BackupVerificationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,"age-recipient"):
                 MODULE.create("bot",pathlib.Path(directory),include_secrets=True)
 
+    def test_archive_is_private_from_the_moment_it_is_created(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive=MODULE.create("site",pathlib.Path(directory))
+            self.assertEqual(0o600,archive.stat().st_mode & 0o777)
+            self.assertEqual(0o600,archive.with_name(archive.name+".sha256").stat().st_mode & 0o777)
+
 
 if __name__=="__main__":unittest.main()

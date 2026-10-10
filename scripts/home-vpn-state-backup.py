@@ -72,25 +72,34 @@ def create(component, output_dir, include_secrets=False, age_recipient=""):
     definition=COMPONENTS[component]
     if include_secrets and not age_recipient:raise ValueError("--include-secrets требует --age-recipient; открытый архив с секретами запрещён")
     output_dir.mkdir(parents=True,exist_ok=True);plain=output_dir/archive_name(component)
-    with tempfile.TemporaryDirectory(prefix="home-vpn-backup-") as directory:
-        staging=pathlib.Path(directory);included=[]
-        for source in definition["state"]+(definition["secrets"] if include_secrets else ()):
-            if not source.exists():continue
-            target=staging/"rootfs"/source.relative_to("/");target.parent.mkdir(parents=True,exist_ok=True)
-            if source.is_dir():shutil.copytree(source,target,symlinks=False)
-            else:shutil.copy2(source,target)
-            included.append(str(source))
-        (staging/"manifest.json").write_text(json.dumps({"format":1,"component":component,"created_at":int(time.time()),"includes_secrets":include_secrets,"paths":included},ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
-        with tarfile.open(plain,"w:gz") as bundle:
-            bundle.add(staging/"manifest.json",arcname="manifest.json",recursive=False)
-            if (staging/"rootfs").exists():bundle.add(staging/"rootfs",arcname="rootfs")
-    os.chmod(plain,0o600);verify(plain,component)
-    target=plain
-    if include_secrets:
-        encrypted=plain.with_suffix(plain.suffix+".age")
-        subprocess.run(["age","-r",age_recipient,"-o",encrypted,plain],check=True);os.chmod(encrypted,0o600);plain.unlink();target=encrypted
-    digest=checksum(target);checksum_path=target.with_name(target.name+".sha256");checksum_path.write_text(f"{digest}  {target.name}\n",encoding="ascii");os.chmod(checksum_path,0o600)
-    return target
+    handle=os.open(plain,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600);os.close(handle)
+    encrypted=plain.with_suffix(plain.suffix+".age")
+    try:
+        with tempfile.TemporaryDirectory(prefix="home-vpn-backup-") as directory:
+            staging=pathlib.Path(directory);included=[]
+            for source in definition["state"]+(definition["secrets"] if include_secrets else ()):
+                if not source.exists():continue
+                target=staging/"rootfs"/source.relative_to("/");target.parent.mkdir(parents=True,exist_ok=True)
+                if source.is_dir():shutil.copytree(source,target,symlinks=False)
+                else:shutil.copy2(source,target)
+                included.append(str(source))
+            (staging/"manifest.json").write_text(json.dumps({"format":1,"component":component,"created_at":int(time.time()),"includes_secrets":include_secrets,"paths":included},ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+            with tarfile.open(plain,"w:gz") as bundle:
+                bundle.add(staging/"manifest.json",arcname="manifest.json",recursive=False)
+                if (staging/"rootfs").exists():bundle.add(staging/"rootfs",arcname="rootfs")
+        verify(plain,component);target=plain
+        if include_secrets:
+            previous_umask=os.umask(0o077)
+            try:subprocess.run(["age","-r",age_recipient,"-o",encrypted,plain],check=True)
+            finally:os.umask(previous_umask)
+            os.chmod(encrypted,0o600);plain.unlink();target=encrypted
+        digest=checksum(target);checksum_path=target.with_name(target.name+".sha256")
+        descriptor=os.open(checksum_path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+        with os.fdopen(descriptor,"w",encoding="ascii") as output:output.write(f"{digest}  {target.name}\n")
+        return target
+    except Exception:
+        if include_secrets:plain.unlink(missing_ok=True);encrypted.unlink(missing_ok=True)
+        raise
 
 
 def main():

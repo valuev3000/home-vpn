@@ -8,6 +8,7 @@ import threading
 import unittest
 import urllib.request
 
+os.environ.setdefault("APP_ENV","test")
 SPEC = importlib.util.spec_from_file_location("vpn_shop_app", os.path.join(os.path.dirname(__file__), "app.py"))
 APP = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(APP)
@@ -393,6 +394,18 @@ class TelegramSiteRegistrationTests(unittest.TestCase):
         with APP.db() as database:row=database.execute('SELECT * FROM mail_settings WHERE id=1').fetchone()
         self.assertNotIn('MailSecret1!',row['smtp_password_enc']);self.assertNotIn('InboxSecret2!',row['imap_password_enc'])
         settings=APP.mail_settings();self.assertEqual(settings['smtp_password'],'MailSecret1!');self.assertEqual(settings['imap_password'],'InboxSecret2!')
+
+    def test_browser_posts_require_same_origin_in_production(self):
+        previous=APP.APP_ENV;APP.APP_ENV='production'
+        try:
+            connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3)
+            body='username=nobody&password=Wrong1%21'
+            connection.request('POST','/login',body,{'Content-Type':'application/x-www-form-urlencoded'})
+            response=connection.getresponse();response.read();self.assertEqual(response.status,403)
+            origin=f'http://127.0.0.1:{self.server.server_port}'
+            connection.request('POST','/login',body,{'Content-Type':'application/x-www-form-urlencoded','Origin':origin})
+            response=connection.getresponse();response.read();self.assertEqual(response.status,401);connection.close()
+        finally:APP.APP_ENV=previous
 
     def test_guest_support_creates_separate_ticket_and_secret_chat_link(self):
         body='name=Guest+User&contact=&message=Please+help+with+VPN'

@@ -88,7 +88,8 @@ def install_bot():
     site_env=pathlib.Path('/etc/vpn-shop.env')
     if site_env.exists():
         merge_env(site_env,{"BOT_ADMIN_URL":panel_url.rstrip('/')+panel_entry},mode=0o600)
-    run("chown", "-R", "vpnshopbot:vpnshopbot", "/opt/vpn-bot", "/var/lib/vpn-bot")
+    run("chown", "-R", "vpnshopbot:vpnshopbot", "/var/lib/vpn-bot")
+    run("chown", "-R", "root:root", "/opt/vpn-bot");run("chmod", "755", "/opt/vpn-bot")
     run("systemctl", "daemon-reload"); run("systemctl", "enable", "--now", "vpn-bot", "vpn-bot-admin", "home-vpn-bot-backup.timer")
     if site_env.exists():run("systemctl","restart","vpn-shop")
     print("Telegram-бот и отдельная панель установлены.")

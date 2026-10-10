@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import hashlib, html, json, math, os, pathlib, ssl, time, urllib.request, urllib.parse, urllib.error, uuid
+import hashlib, html, json, math, os, pathlib, time, urllib.request, urllib.parse, urllib.error, uuid
 
 TOKEN=os.getenv("TELEGRAM_BOT_TOKEN","")
 SHOP=os.getenv("SHOP_API_URL","http://127.0.0.1:8080").rstrip("/")
@@ -186,8 +186,7 @@ def update_payment_timers():
 def api(path,body=None):
     raw=json.dumps(body).encode() if body is not None else None
     req=urllib.request.Request(SHOP+path,raw,headers={"X-API-Key":SECRET,"Content-Type":"application/json"},method="POST" if body is not None else "GET")
-    context=ssl._create_unverified_context() if SHOP.startswith("https://") else None
-    with urllib.request.urlopen(req,timeout=15,context=context) as r:return json.loads(r.read())
+    with urllib.request.urlopen(req,timeout=15) as r:return json.loads(r.read())
 
 def sync_payment_timers():
     for order_id in list(PAYMENT_TIMERS):
@@ -801,7 +800,7 @@ def handle(update):
             markup=json.dumps({"inline_keyboard":[[{"text":"🎁 Активировать пробный период","callback_data":f"payconfirm:{o['id']}"}],[{"text":"❌ Отменить заказ","callback_data":f"ordercancel:{o['id']}"}]]},ensure_ascii=False)
             send(chat,f"Пробный заказ №{o['id']} создан. Один Telegram-аккаунт может получить его только один раз.",markup)
         else:
-            qr=urllib.request.urlopen(o["qr_url"],context=ssl._create_unverified_context(),timeout=15).read()
+            qr=urllib.request.urlopen(o["qr_url"],timeout=15).read()
             current="новая подписка" if not o.get("current_expiry") else time.strftime("%d.%m.%Y",time.localtime(o["current_expiry"]/1000))
             projected=time.strftime("%d.%m.%Y",time.localtime(o["projected_expiry"]/1000))
             action="Изменение тарифа" if o.get("action")=="upgrade" else ("Продление" if o.get("action")=="renew" else "Новая подписка")
@@ -864,7 +863,7 @@ def main():
                         caption=f"⏳ <b>Оплата начата</b>\n\nЗаказ №{e['id']}\nПодписка: <b>{html.escape(subscription_name)}</b>\n\nПодписка временно активирована и передана администратору на проверку.\n\nСсылка подписки:\n<code>{html.escape(subscription)}</code>\n\nОтсканируйте QR-код в HAPP или скопируйте ссылку кнопкой ниже."
                         markup=json.dumps({"inline_keyboard":[[{"text":"📋 Скопировать подписку","copy_text":{"text":subscription}}],[{"text":"📖 Инструкции по подключению","url":PUBLIC+"/instructions"}]]},ensure_ascii=False)
                         try:
-                            qr=urllib.request.urlopen(PUBLIC+"/subscription-qr/"+e["token"]+".png",context=ssl._create_unverified_context(),timeout=15).read()
+                            qr=urllib.request.urlopen(PUBLIC+"/subscription-qr/"+e["token"]+".png",timeout=15).read()
                             tg("sendPhoto",{"chat_id":e["telegram_id"],"caption":caption,"parse_mode":"HTML","reply_markup":markup},{"photo":("home-vpn-subscription.png",qr,"image/png")})
                         except Exception:send(e["telegram_id"],caption,markup)
                     if ADMIN_ID:
@@ -879,7 +878,7 @@ def main():
                             caption=f"🎁 <b>Пробный период активирован</b>\n\nЗаказ №{e['id']}\nПодписка: <b>{html.escape(subscription_name)}</b>\n\nСсылка подписки:\n<code>{html.escape(subscription)}</code>\n\nОтсканируйте QR-код в HAPP или скопируйте ссылку кнопкой ниже."
                             markup=json.dumps({"inline_keyboard":[[{"text":"📋 Скопировать подписку","copy_text":{"text":subscription}}],[{"text":"📖 Инструкции по подключению","url":PUBLIC+"/instructions"}]]},ensure_ascii=False)
                             try:
-                                qr=urllib.request.urlopen(PUBLIC+"/subscription-qr/"+e["token"]+".png",context=ssl._create_unverified_context(),timeout=15).read()
+                                qr=urllib.request.urlopen(PUBLIC+"/subscription-qr/"+e["token"]+".png",timeout=15).read()
                                 tg("sendPhoto",{"chat_id":e["telegram_id"],"caption":caption,"parse_mode":"HTML","reply_markup":markup},{"photo":("home-vpn-subscription.png",qr,"image/png")})
                             except Exception:send(e["telegram_id"],caption,markup)
                         else:

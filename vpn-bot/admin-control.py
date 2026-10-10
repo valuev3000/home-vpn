@@ -7,7 +7,6 @@ import json
 import os
 import pathlib
 import subprocess
-import ssl
 import tempfile
 import sys
 import urllib.error
@@ -71,8 +70,7 @@ def sync_site_admin(values, admin_id):
     secret=values.get("SHOP_API_SECRET", "")
     if not url.startswith(("http://","https://")) or not secret:raise RuntimeError("Связь с API сайта не настроена")
     request=urllib.request.Request(url,json.dumps({"telegram_id":int(admin_id)}).encode(),headers={"X-API-Key":secret,"Content-Type":"application/json"},method="POST")
-    context=ssl._create_unverified_context() if url.startswith("https://") else None
-    with urllib.request.urlopen(request,timeout=15,context=context) as response:
+    with urllib.request.urlopen(request,timeout=15) as response:
         result=json.load(response)
     if not result.get("ok"):raise RuntimeError("Сайт не подтвердил новый Admin ID")
 
@@ -80,8 +78,7 @@ def sync_site_admin(values, admin_id):
 def site_catalog(values):
     url=values.get("SHOP_API_URL","").rstrip("/")+"/api/bot/catalog"
     request=urllib.request.Request(url,headers={"X-API-Key":values.get("SHOP_API_SECRET","")})
-    context=ssl._create_unverified_context() if url.startswith("https://") else None
-    with urllib.request.urlopen(request,timeout=10,context=context) as response:return json.load(response)
+    with urllib.request.urlopen(request,timeout=10) as response:return json.load(response)
 
 
 def save_settings(raw):
@@ -195,7 +192,7 @@ def status():
     except Exception as error: result.update({"telegram_ok": False, "telegram_error": str(error)[:300]})
     try:
         request = urllib.request.Request(values.get("SHOP_API_URL", "").rstrip("/") + "/health")
-        with urllib.request.urlopen(request, timeout=10, context=__import__('ssl')._create_unverified_context()) as response: result["site_ok"] = response.status == 200
+        with urllib.request.urlopen(request, timeout=10) as response: result["site_ok"] = response.status == 200
     except Exception as error: result.update({"site_ok": False, "site_error": str(error)[:300]})
     try:
         catalog=site_catalog(values);result.update({"catalog_ok":True,"tariff_count":len(catalog.get("tariffs",[])),"catalog_currency":catalog.get("currency","")})

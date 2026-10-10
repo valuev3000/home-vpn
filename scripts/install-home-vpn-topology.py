@@ -41,16 +41,25 @@ def run(arguments, *, input_text=None, capture=False, timeout=None):
     )
 
 
-def ssh_script(target, script, *, capture=False, timeout=None):
+def ssh_command(target, arguments, *, input_text=None, capture=False, timeout=None):
+    """Run an argv-safe command through OpenSSH's unavoidable remote shell."""
+    command = shlex.join([str(item) for item in arguments])
     return run(
-        ["ssh", target, "bash", "-s"],
-        input_text=script, capture=capture, timeout=timeout,
+        ["ssh", "--", target, command], input_text=input_text,
+        capture=capture, timeout=timeout,
+    )
+
+
+def ssh_script(target, script, *, capture=False, timeout=None):
+    return ssh_command(
+        target, ["bash", "-s"], input_text=script,
+        capture=capture, timeout=timeout,
     )
 
 
 def ssh_python(target, code, arguments=(), *, capture=False):
-    return run(
-        ["ssh", target, "python3", "-", *arguments],
+    return ssh_command(
+        target, ["python3", "-", *arguments],
         input_text=code, capture=capture,
     )
 
@@ -80,6 +89,34 @@ def safe_id(value):
     if not value:
         raise SystemExit("ID ноды не может быть пустым")
     return value[:32]
+
+
+def valid_ssh_target(value, label="SSH target"):
+    """Reject values that OpenSSH could interpret as local options."""
+    value = str(value or "")
+    if not value or value.startswith("-") or not re.fullmatch(r"[A-Za-z0-9_.@:%\[\]-]+", value):
+        raise SystemExit(f"{label}: недопустимый SSH-адрес {value!r}")
+    return value
+
+
+def valid_public_url(value, label="public_url"):
+    try:parsed=urllib.parse.urlparse(str(value or ""));port=parsed.port
+    except ValueError as error:raise SystemExit(f"{label}: некорректный URL") from error
+    host=parsed.hostname or ""
+    try:ipaddress.ip_address(host);valid_host=True
+    except ValueError:valid_host=bool(re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?",host))
+    if parsed.scheme not in ("http","https") or not valid_host or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("","/"):
+        raise SystemExit(f"{label}: нужен URL без credentials, path, query и fragment")
+    if port is not None and not 1 <= port <= 65535:raise SystemExit(f"{label}: недопустимый порт")
+    return parsed
+
+
+def valid_tls_path(value, label):
+    value=str(value or "")
+    path=pathlib.PurePosixPath(value)
+    if not value.startswith("/") or ".." in path.parts or not re.fullmatch(r"[A-Za-z0-9_./-]+",value):
+        raise SystemExit(f"{label}: нужен безопасный абсолютный путь")
+    return value
 
 
 def node_wizard(index, mode, central_address=None):
@@ -133,6 +170,7 @@ def wizard():
     topology = {
         "mode": mode,
         "protocol_installer": {"url": installer_url, "sha256": installer_sha256},
+        "telegram_bot": {"enabled": ask("Установить Telegram-бот? [да/нет]", "да").lower() in ("да", "д", "yes", "y")},
         "telegram_egress": {"listen": "127.0.0.1", "port": 18080, "strategy": "leastPing", "probe_interval": "30s"},
         "site": {"ssh_host": site_ssh, "address": site_address, "public_url": public_url,
                  "tls_cert": tls_cert, "tls_key": tls_key},
@@ -151,6 +189,9 @@ def validate_topology(topology):
         raise SystemExit("protocol_installer.url должен быть HTTPS-URL")
     if not re.fullmatch(r"[0-9a-fA-F]{64}", str(installer.get("sha256") or "")):
         raise SystemExit("protocol_installer.sha256 должен содержать 64 hex-символа")
+    bot = topology.get("telegram_bot") or {}
+    if "enabled" in bot and not isinstance(bot["enabled"], bool):
+        raise SystemExit("telegram_bot.enabled должен быть true или false")
     egress = topology.get("telegram_egress") or {}
     if egress.get("listen", "127.0.0.1") not in ("127.0.0.1", "::1"):
         raise SystemExit("telegram_egress.listen должен быть loopback-адресом")
@@ -166,22 +207,31 @@ def validate_topology(topology):
         if not site.get(key):
             raise SystemExit(f"topology.site.{key} обязателен")
     valid_ip(site["address"], "Central/site address")
-    public_url = urllib.parse.urlparse(str(site["public_url"]))
-    if public_url.scheme not in ("http", "https") or not public_url.hostname:
-        raise SystemExit("topology.site.public_url должен быть полным http(s)-URL")
+    valid_public_url(site["public_url"],"topology.site.public_url")
     required_node_keys = ("id", "name", "country", "ssh_host", "address", "public_host", "sni")
     for index, node in enumerate(nodes, 1):
         for key in required_node_keys:
             if not node.get(key):
                 raise SystemExit(f"topology.nodes[{index - 1}].{key} обязателен")
         valid_ip(node["address"], f"Адрес ноды {index}")
+        api_host = str(node.get("api_host") or "")
+        if api_host and not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?", api_host):
+            raise SystemExit(f"api_host ноды {index}: нужно DNS-имя без схемы и пути")
         if "://" in str(node["public_host"]):
             raise SystemExit(f"public_host ноды {index} указывается без http:// и https://")
         if bool(node.get("cert")) != bool(node.get("key")):
             raise SystemExit(f"Для ноды {index} cert и key указываются только вместе")
     if bool(site.get("tls_cert")) != bool(site.get("tls_key")):
         raise SystemExit("site.tls_cert и site.tls_key указываются только вместе")
+    if site.get("tls_cert"):
+        valid_tls_path(site["tls_cert"],"site.tls_cert");valid_tls_path(site["tls_key"],"site.tls_key")
+    for index,node in enumerate(nodes):
+        if node.get("cert"):
+            valid_tls_path(node["cert"],f"nodes[{index}].cert");valid_tls_path(node["key"],f"nodes[{index}].key")
     targets = [str(topology["site"]["ssh_host"])] + [str(node["ssh_host"]) for node in nodes]
+    valid_ssh_target(targets[0], "topology.site.ssh_host")
+    for index, target in enumerate(targets[1:]):
+        valid_ssh_target(target, f"topology.nodes[{index}].ssh_host")
     if mode in (1, 2) and len(targets) != len(set(targets)):
         raise SystemExit("Центральная и зарубежные ноды должны быть разными VPS")
     if mode == 3 and (len(nodes) != 1 or nodes[0]["ssh_host"] != topology["site"]["ssh_host"]):
@@ -210,18 +260,30 @@ def show_plan(topology):
         roles = " · аварийный MTProto" if node["id"] == topology["emergency_node"] else ""
         print(f"VPN: {node['id']} · {node['ssh_host']} · {node['address']} · 11 подключений{suffix}{roles}")
     print("Заглушка: " + ("на каждой зарубежной ноде" if topology["mode"] in (1, 2) else "не требуется"))
-    print("Telegram-бот и веб-панели: центральная VPS")
+    print("Telegram-бот: " + ("центральная VPS" if bot_enabled(topology) else "отключён"))
 
 
 def check_servers(topology):
     targets = {topology["site"]["ssh_host"]} | {node["ssh_host"] for node in topology["nodes"]}
     for target in sorted(targets):
-        result = run(["ssh", target, "id", "-u"], capture=True)
+        result = run(["ssh", "--", target, "id", "-u"], capture=True)
         if result.stdout.strip() != "0":
             raise RuntimeError(f"{target}: для установки нужен root SSH")
 
 
 def build_source_archive(target):
+    tracked = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files", "-z"],
+        capture_output=True, check=False,
+    )
+    if tracked.returncode == 0 and tracked.stdout:
+        subprocess.run(
+            ["tar", "-C", str(ROOT), "-czf", str(target), "--null", "-T", "-"],
+            input=tracked.stdout, check=True,
+        )
+        return
+    # A published source archive has no .git and already contains only release
+    # files. Retain defensive exclusions for that installation path.
     run([
         "tar", "--exclude=.git", "--exclude=__pycache__", "--exclude=*.pyc",
         "--exclude=*.db", "--exclude=*.sqlite*", "--exclude=*.env",
@@ -236,7 +298,7 @@ def build_source_archive(target):
 
 def deploy_source(target, archive):
     remote = f"/tmp/home-vpn-source-{os.getpid()}.tar.gz"
-    run(["scp", archive, f"{target}:{remote}"])
+    run(["scp", "--", archive, f"{target}:{remote}"])
     try:
         ssh_script(target, f'''set -Eeuo pipefail
 install -d -m 0750 /opt/home-vpn-source
@@ -244,13 +306,18 @@ tar -xzf {shlex.quote(remote)} -C /opt/home-vpn-source
 rm -f -- {shlex.quote(remote)}
 ''')
     finally:
-        run(["ssh", target, "rm", "-f", "--", remote])
+        ssh_command(target, ["rm", "-f", "--", remote])
 
 
 def download_protocol_installer(target, topology):
     installer = topology["protocol_installer"]
     with urllib.request.urlopen(installer["url"], timeout=60) as response:
-        payload = response.read()
+        final_url = urllib.parse.urlparse(response.geturl())
+        if final_url.scheme != "https":
+            raise RuntimeError("Установщик перенаправил загрузку на адрес без HTTPS")
+        payload = response.read(4 * 1024 * 1024 + 1)
+    if len(payload) > 4 * 1024 * 1024:
+        raise RuntimeError("Установщик протоколов больше допустимых 4 MiB")
     digest = hashlib.sha256(payload).hexdigest()
     if not hmac.compare_digest(digest, installer["sha256"].lower()):
         raise RuntimeError(f"Неожиданный SHA-256 установщика протоколов: {digest}")
@@ -259,11 +326,11 @@ def download_protocol_installer(target, topology):
 
 def push_file(target, source, destination, mode):
     remote = f"/tmp/home-vpn-{os.getpid()}-{pathlib.Path(source).name}"
-    run(["scp", source, f"{target}:{remote}"])
+    run(["scp", "--", source, f"{target}:{remote}"])
     try:
         ssh_script(target, f"install -m {mode:o} {shlex.quote(remote)} {shlex.quote(destination)}\n")
     finally:
-        run(["ssh", target, "rm", "-f", "--", remote])
+        ssh_command(target, ["rm", "-f", "--", remote])
 
 
 def existing_kit_state(target):
@@ -347,9 +414,15 @@ print(json.dumps({"rows":rows,"integrity":integrity,"install_env":pathlib.Path("
     parsed = urllib.parse.urlparse(access)
     # The control plane always talks to 3x-ui through the protected server
     # network. Its administrative endpoint is never put on a public route.
-    private_host = "[" + node["address"] + "]" if ":" in node["address"] else node["address"]
-    netloc = private_host + ((":" + str(parsed.port)) if parsed.port else "")
-    access = urllib.parse.urlunparse(parsed._replace(netloc=netloc))
+    api_address = str(node.get("api_host") or node["address"])
+    private_host = "[" + api_address + "]" if ":" in api_address else api_address
+    if node.get("api_host"):
+        # KIT exposes its loopback-only panel through the authenticated HTTPS
+        # path on port 443. Never retain the unreachable local panel port.
+        access = urllib.parse.urlunparse(parsed._replace(scheme="https", netloc=private_host))
+    else:
+        netloc = private_host + ((":" + str(parsed.port)) if parsed.port else "")
+        access = urllib.parse.urlunparse(parsed._replace(netloc=netloc))
     routes = []
     for item in data["rows"]:
         try:
@@ -374,7 +447,7 @@ with os.fdopen(fd,"w",encoding="utf-8") as out:json.dump(payload,out,ensure_asci
 os.chmod(tmp,mode);os.replace(tmp,target)
 '''
     serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    run(["ssh", target, "python3", "-c", code, path, f"{mode:o}"], input_text=serialized)
+    ssh_command(target, ["python3", "-c", code, path, f"{mode:o}"], input_text=serialized)
 
 
 def update_remote_envs(target, updates):
@@ -392,20 +465,19 @@ for filename,changes in json.load(sys.stdin).items():
  os.chmod(tmp,0o600);os.replace(tmp,path)
 '''
     serialized = json.dumps(updates, ensure_ascii=False, separators=(",", ":"))
-    run(["ssh", target, "python3", "-c", code], input_text=serialized)
+    ssh_command(target, ["python3", "-c", code], input_text=serialized)
 
 
 def remote_file_exists(target, path):
     code="import pathlib,sys;print('1' if pathlib.Path(sys.argv[1]).is_file() else '0')"
-    result=run(["ssh",target,"python3","-c",code,path],capture=True)
+    result=ssh_command(target,["python3","-c",code,path],capture=True)
     return result.stdout.strip()=="1"
 
 
 def read_remote_json(target, path):
     code = "import pathlib,sys;print(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))"
-    return json.loads(run(
-        ["ssh", target, "python3", "-c", code, path],
-        capture=True,
+    return json.loads(ssh_command(
+        target, ["python3", "-c", code, path], capture=True,
     ).stdout)
 
 
@@ -462,6 +534,7 @@ HOME_VPN_INSTALL_BOT=0 python3 /opt/home-vpn-source/scripts/home-vpn-setup.py in
     bot_inventory = inventories[emergency_node["id"]]
     token_env = next(node["token_env"] for node in config["nodes"] if node["id"] == emergency_node["id"])
     update_remote_envs(target, {"/etc/vpn-shop.env": {
+        "TRUST_PROXY": "1",
         "MTPROTO_INBOUND_ID": str(bot_inventory["mtproto_id"]),
         "MTPROTO_PUBLIC_HOST": emergency_node["public_host"],
         "MTPROTO_PUBLIC_PORT": "443", "MTPROTO_XUI_URL": bot_inventory["panel_url"],
@@ -491,8 +564,7 @@ def panel_api(inventory, method, path, body=None):
         method=method,
         headers={"Authorization": "Bearer " + inventory["token"], "Content-Type": "application/json"},
     )
-    context = __import__("ssl")._create_unverified_context()
-    with urllib.request.urlopen(request, context=context, timeout=30) as response:
+    with urllib.request.urlopen(request, timeout=30) as response:
         return json.load(response)
 
 
@@ -590,7 +662,8 @@ def install_bot_egress(topology, inventories):
         outbounds.append(xhttp_outbound(node, ensure_bot_egress_link(node, inventories[node["id"]])))
     config = bot_egress_config(outbounds, topology.get("telegram_egress"))
     central=topology["site"]["ssh_host"];binary=ensure_central_xray(topology)
-    pending_config = "/etc/home-vpn/bot-egress.json.new"
+    # Xray determines the config format from the final suffix.
+    pending_config = "/etc/home-vpn/bot-egress.new.json"
     push_json(central, pending_config, config, 0o600)
     ownership={"clients":[{"email":"homevpn-bot-egress-"+node["id"],"panel_url":inventories[node["id"]]["panel_url"],"token_env":"XUI_TOKEN" if index==0 else node["id"].upper().replace("-","_")+"_XUI_TOKEN"} for index,node in enumerate(topology["nodes"])]}
     push_json(central,"/etc/home-vpn/bot-egress-ownership.json",ownership,0o600)
@@ -602,10 +675,25 @@ Wants=network-online.target
 Type=simple
 User=vpnshopbot
 Group=vpnshopbot
+SupplementaryGroups=homevpn
 ExecStart={binary} run -config /etc/home-vpn/bot-egress.json
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
 [Install]
 WantedBy=multi-user.target
 '''
@@ -613,6 +701,11 @@ WantedBy=multi-user.target
     ssh_script(central, f'''set -Eeuo pipefail
 getent group vpnshopbot >/dev/null || groupadd --system vpnshopbot
 getent passwd vpnshopbot >/dev/null || useradd --system --gid vpnshopbot --home-dir /var/lib/vpn-bot --shell /usr/sbin/nologin vpnshopbot
+getent group homevpn >/dev/null || groupadd --system homevpn
+getent passwd vpnshop >/dev/null && usermod -a -G homevpn vpnshop
+usermod -a -G homevpn vpnshopbot
+chown root:homevpn /etc/home-vpn
+chmod 0770 /etc/home-vpn
 {shlex.quote(binary)} run -test -config {shlex.quote(pending_config)}
 install -o root -g vpnshopbot -m 0640 {shlex.quote(pending_config)} /etc/home-vpn/bot-egress.json
 rm -f -- {shlex.quote(pending_config)}
@@ -689,8 +782,50 @@ def mode3_fallback_payload(inbound, destination=8080):
     return payload
 
 
+def mode3_nginx_config(site):
+    parsed=valid_public_url(site["public_url"])
+    cert=valid_tls_path(site.get("tls_cert"),"site.tls_cert")
+    key=valid_tls_path(site.get("tls_key"),"site.tls_key")
+    return f'''server {{
+    listen 127.0.0.1:10446 ssl http2 proxy_protocol;
+    server_name {parsed.hostname};
+    ssl_certificate {cert};
+    ssl_certificate_key {key};
+    ssl_protocols TLSv1.2 TLSv1.3;
+    set_real_ip_from 127.0.0.1;
+    real_ip_header proxy_protocol;
+    server_tokens off;
+    client_max_body_size 2m;
+    location / {{
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $proxy_protocol_addr;
+        proxy_set_header X-Forwarded-For $proxy_protocol_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+    }}
+}}
+'''
+
+
 def configure_mode3_public_route(topology, inventories):
     if topology["mode"] != 3:return
+    target=topology["site"]["ssh_host"]
+    if remote_file_exists(target,"/etc/nginx/kit-stream.conf"):
+        site=topology["site"]
+        if not site.get("tls_cert") or not site.get("tls_key"):
+            raise RuntimeError("mode 3 с nginx KIT требует TLS-сертификат сайта")
+        config=mode3_nginx_config(site)
+        encoded=base64.b64encode(config.encode()).decode()
+        ssh_script(target,f'''set -Eeuo pipefail
+rm -f -- /etc/nginx/conf.d/home-vpn-mode3.conf
+printf '%s' {shlex.quote(encoded)} | base64 -d > /etc/nginx/conf.d/zz-home-vpn-mode3.conf
+chmod 0644 /etc/nginx/conf.d/zz-home-vpn-mode3.conf
+nginx -t
+systemctl reload nginx
+''')
+        return
     node=topology["nodes"][0];inventory=inventories[node["id"]]
     result=panel_api(inventory,"GET","/panel/api/inbounds/list")
     rows=result.get("obj") or []
@@ -814,10 +949,16 @@ systemctl enable --now home-vpn-cascade.service
     ssh_script(ssh_target, code, timeout=300)
 
 
-def credentials_wizard():
+def bot_enabled(topology):
+    return bool((topology.get("telegram_bot") or {}).get("enabled", True))
+
+
+def credentials_wizard(topology):
     admin_user=ask("Логин администратора сайта","home-admin")
     admin_password=ask("Пароль администратора сайта",secret=True)
     if len(admin_password)<10:raise SystemExit("Пароль администратора должен содержать минимум 10 символов")
+    if not bot_enabled(topology):
+        return {"admin_user":admin_user,"admin_password":admin_password}
     telegram_token=ask("Telegram Bot Token",secret=True)
     telegram_admin_id=ask("Цифровой Telegram ID администратора")
     if not telegram_token or not telegram_admin_id.isdigit():raise SystemExit("Нужны Bot Token и цифровой Telegram ID")
@@ -830,7 +971,7 @@ def credentials_wizard():
 
 def apply(topology):
     check_servers(topology)
-    credentials=credentials_wizard()
+    credentials=credentials_wizard(topology)
     targets={topology["site"]["ssh_host"]}|{node["ssh_host"] for node in topology["nodes"]}
     with tempfile.TemporaryDirectory(prefix="home-vpn-topology-") as temporary:
         archive=str(pathlib.Path(temporary)/"source.tar.gz");installer=str(pathlib.Path(temporary)/"3x-ui-protocol-installer.sh")
@@ -841,14 +982,16 @@ def apply(topology):
     install_site(topology,inventories,credentials)
     enforce_primary_site(topology)
     configure_mode3_public_route(topology,inventories)
-    install_bot_egress(topology,inventories)
-    install_bot(topology,credentials)
+    if bot_enabled(topology):
+        install_bot_egress(topology,inventories)
+        install_bot(topology,credentials)
     install_placeholders(topology)
     configure_cascade(topology,inventories)
     for node in topology["nodes"]:
         ssh_script(node["ssh_host"],"systemctl is-active --quiet x-ui nginx kit-sub home-vpn-kit-backup.timer\n")
     ssh_script(topology["site"]["ssh_host"],"systemctl is-active --quiet vpn-shop\n")
-    ssh_script(topology["site"]["ssh_host"],"systemctl is-active --quiet vpn-bot vpn-bot-admin home-vpn-bot-egress\n")
+    if bot_enabled(topology):
+        ssh_script(topology["site"]["ssh_host"],"systemctl is-active --quiet vpn-bot vpn-bot-admin home-vpn-bot-egress\n")
     smoke_public_route(topology)
     print("Установка и проверка ролей завершены")
 

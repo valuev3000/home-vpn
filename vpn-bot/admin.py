@@ -55,7 +55,7 @@ def csrf_token():
 class Handler(BaseHTTPRequestHandler):
     def sendx(self, status, data, content_type="text/html; charset=utf-8"):
         if isinstance(data, str): data = data.encode()
-        self.send_response(status); self.send_header("Content-Type", content_type); self.send_header("Content-Length", str(len(data))); self.send_header("X-Frame-Options", "DENY"); self.send_header("X-Content-Type-Options", "nosniff"); self.send_header("Referrer-Policy", "no-referrer"); self.end_headers(); self.wfile.write(data)
+        self.send_response(status); self.send_header("Content-Type", content_type); self.send_header("Content-Length", str(len(data))); self.send_header("X-Frame-Options", "DENY"); self.send_header("X-Content-Type-Options", "nosniff"); self.send_header("Referrer-Policy", "no-referrer"); self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"); self.end_headers(); self.wfile.write(data)
     def redirect(self, target, cookie=None):
         self.send_response(303); self.send_header("Location", target)
         if cookie: self.send_header("Set-Cookie", cookie)

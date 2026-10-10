@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import base64,hashlib,hmac,html,http.client,imaplib,io,json,math,mimetypes,os,pathlib,secrets,shutil,smtplib,sqlite3,ssl,subprocess,time,threading,urllib.error,urllib.request,uuid
+import base64,contextlib,hashlib,hmac,html,http.client,imaplib,io,ipaddress,json,math,mimetypes,os,pathlib,secrets,shutil,smtplib,sqlite3,ssl,subprocess,time,threading,urllib.error,urllib.request,uuid
 from decimal import Decimal,InvalidOperation
 from email import policy
 from email.header import decode_header
@@ -86,7 +86,12 @@ def save_runtime_config(data):
  apply_runtime_config(data);directory=os.path.dirname(CONFIG_FILE);os.makedirs(directory,exist_ok=True);temporary=CONFIG_FILE+'.tmp'
  with open(temporary,'w',encoding='utf-8') as stream:json.dump(data,stream,ensure_ascii=False,indent=2);stream.write('\n')
  os.chmod(temporary,0o660);os.replace(temporary,CONFIG_FILE)
-def db(): c=sqlite3.connect(DB);c.row_factory=sqlite3.Row;return c
+@contextlib.contextmanager
+def db():
+ c=sqlite3.connect(DB);c.row_factory=sqlite3.Row
+ try:
+  with c:yield c
+ finally:c.close()
 def admin_telegram_id():
  try:
   with db() as c:row=c.execute("SELECT telegram_id FROM users WHERE role='admin' ORDER BY id LIMIT 1").fetchone()
@@ -386,13 +391,13 @@ def unfinished_order_for(c,user_id,telegram_id,action,target):
 def payment_destination(token):return PUBLIC+'/pay/'+token+'/start'
 def xapi(method,path,body=None):
  req=urllib.request.Request(XURL+path,data=json.dumps(body).encode() if body is not None else None,method=method,headers={'Authorization':'Bearer '+XTOKEN,'Content-Type':'application/json'})
- with urllib.request.urlopen(req,context=ssl._create_unverified_context(),timeout=15) as r:return json.loads(r.read())
+ with urllib.request.urlopen(req,timeout=15) as r:return json.loads(r.read())
 def node_xapi(node,method,path,body=None):
  url=str(node.get('panel_url') or '').rstrip('/');token=os.getenv(str(node.get('token_env') or ''),'')
  if not url:raise RuntimeError('У ноды не указан URL API 3x-ui')
  if not token:raise RuntimeError('На сервере сайта не задана переменная '+str(node.get('token_env') or 'с API-токеном'))
  req=urllib.request.Request(url+path,data=json.dumps(body).encode() if body is not None else None,method=method,headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
- with urllib.request.urlopen(req,context=ssl._create_unverified_context(),timeout=15) as response:return json.loads(response.read())
+ with urllib.request.urlopen(req,timeout=15) as response:return json.loads(response.read())
 def node_by_id(node_id):
  return next((node for node in NODES if str(node.get('id'))==str(node_id)),PRIMARY_NODE)
 def api_for_node(node,method,path,body=None):
@@ -418,7 +423,7 @@ def order_node(order):
 def mtproto_xapi(method,path,body=None):
  if not MTPROTO_XUI_URL or not MTPROTO_XUI_TOKEN:raise RuntimeError('API MTProto-ноды не настроен')
  req=urllib.request.Request(MTPROTO_XUI_URL+path,data=json.dumps(body).encode() if body is not None else None,method=method,headers={'Authorization':'Bearer '+MTPROTO_XUI_TOKEN,'Content-Type':'application/json'})
- with urllib.request.urlopen(req,context=ssl._create_unverified_context(),timeout=15) as response:return json.loads(response.read())
+ with urllib.request.urlopen(req,timeout=15) as response:return json.loads(response.read())
 def discover_node_routes(node):
  result=node_xapi(node,'GET','/panel/api/inbounds/list');items=result.get('obj') or []
  if not result.get('success',True):raise RuntimeError(str(result.get('msg') or '3x-ui вернула ошибку'))
@@ -915,11 +920,10 @@ def choose_node(connection=None):
  candidates=[node_metrics(n) for n in NODES if n.get('enabled',True) and n.get('accept_new',True) and not n.get('maintenance',False)]
  candidates=[x for x in candidates if x.get('online')]
  if not candidates:return None
- own_connection=connection is None;c=connection or db()
- try:
-  pending={str(row[0]):int(row[1]) for row in c.execute("SELECT assigned_node,count(*) FROM orders WHERE assigned_node IS NOT NULL AND COALESCE(order_kind,'new')='new' AND status IN ('pending','processing','review','payment_pending','payment_error') GROUP BY assigned_node")}
- finally:
-  if own_connection:c.close()
+ query="SELECT assigned_node,count(*) FROM orders WHERE assigned_node IS NOT NULL AND COALESCE(order_kind,'new')='new' AND status IN ('pending','processing','review','payment_pending','payment_error') GROUP BY assigned_node"
+ if connection is None:
+  with db() as c:pending={str(row[0]):int(row[1]) for row in c.execute(query)}
+ else:pending={str(row[0]):int(row[1]) for row in connection.execute(query)}
  for item in candidates:item['pending_assignments']=pending.get(str(item['id']),0)
  return min(candidates,key=lambda x:((x.get('active_users',0)+x.get('pending_assignments',0)+1)/max(1,x.get('weight',100)),x.get('cpu',100)+x.get('ram_percent',100),str(x.get('id'))))['id']
 def status_data():
@@ -1020,13 +1024,27 @@ def page(title,body,admin=False):
  mark=html.escape(BRAND_NAME[:1].upper() or 'V');return f"<!doctype html><html lang=ru><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><meta name=theme-color content='#07101d'><title>{title} · {html.escape(BRAND_NAME)}</title><style>{CSS}</style><body><div class=w><header class=site-header><div class=n><b class=brand><a href=/><span class=brand-mark>{mark}</span><span class=brand-copy>{html.escape(BRAND_NAME)} <span class=a>{html.escape(BRAND_TAGLINE)}</span><small>{html.escape(BRAND_SUBTITLE)}</small></span></a></b><div data-user-tools></div></div>{nav}</header>{body}{footer}</div>{script}</body></html>".encode()
 class H(BaseHTTPRequestHandler):
  def setup(self):super().setup();self.connection.settimeout(20)
- def request_ip(self):return str((self.headers.get('X-Real-IP') if TRUST_PROXY else '') or self.client_address[0] or '')[:64]
+ def request_ip(self):
+  candidate=self.headers.get('X-Real-IP','') if TRUST_PROXY and self.client_address[0] in ('127.0.0.1','::1') else self.client_address[0]
+  try:return str(ipaddress.ip_address(candidate))
+  except ValueError:return str(self.client_address[0] or '')[:64]
+ def same_origin(self):
+  origin=self.headers.get('Origin','')
+  if not origin:return APP_ENV=='test'
+  try:
+   parsed=urlparse(origin);host=urlparse('//'+self.headers.get('Host',''))
+   expected_scheme=urlparse(PUBLIC).scheme or 'https';origin_port=parsed.port or (443 if parsed.scheme=='https' else 80);host_port=host.port or (443 if expected_scheme=='https' else 80)
+   scheme_ok=parsed.scheme==expected_scheme if host.port is None else parsed.scheme in ('http','https')
+   return scheme_ok and parsed.hostname==host.hostname and origin_port==host_port
+  except ValueError:return False
  def sendx(self,code,data,typ='text/html; charset=utf-8'):
   if isinstance(data,str):data=data.encode()
   if typ.startswith('text/html') and b'<div class=w>' in data:
    username=self.who();tools=user_tools(username);tools=(f'<a class=icon-action href=/mode aria-label="Сменить режим">⇄ <span class=desktop-label>Режим</span></a>'+tools) if self.standby_admin() and not self.isadmin() else tools;data=data.replace(b'<div data-user-tools></div>',tools.encode(),1);banner=telegram_link_warning(username)+maintenance_banner(username)
    if banner:data=data.replace(b'<div class=w>',b'<div class=w>'+banner.encode(),1)
-  self.send_response(code);self.send_header('Content-Type',typ);self.send_header('Content-Length',str(len(data)));self.send_header('X-Content-Type-Options','nosniff');self.send_header('X-Frame-Options','DENY');self.send_header('Referrer-Policy','no-referrer');self.send_header('Permissions-Policy','camera=(), microphone=(), geolocation=()');self.end_headers()
+  self.send_response(code);self.send_header('Content-Type',typ);self.send_header('Content-Length',str(len(data)));self.send_header('X-Content-Type-Options','nosniff');self.send_header('X-Frame-Options','DENY');self.send_header('Referrer-Policy','no-referrer');self.send_header('Permissions-Policy','camera=(), microphone=(), geolocation=()');self.send_header('Content-Security-Policy',"default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+  if PUBLIC.startswith('https://'):self.send_header('Strict-Transport-Security','max-age=31536000; includeSubDomains')
+  self.end_headers()
   if self.command!='HEAD':self.wfile.write(data)
  def limited(self,scope='general'):
   limit,window=(15,600) if scope=='auth' else (180,60)
@@ -1039,6 +1057,7 @@ class H(BaseHTTPRequestHandler):
   if not path.is_file():return self.sendx(404,'not found','text/plain')
   typ=mimetypes.guess_type(path.name)[0] or 'application/octet-stream'
   self.send_response(200);self.send_header('Content-Type',typ);self.send_header('Content-Length',str(path.stat().st_size));self.send_header('X-Content-Type-Options','nosniff')
+  if PUBLIC.startswith('https://'):self.send_header('Strict-Transport-Security','max-age=31536000; includeSubDomains')
   if download:self.send_header('Content-Disposition',f'attachment; filename="{path.name}"')
   self.end_headers()
   if self.command!='HEAD':
@@ -1086,8 +1105,9 @@ class H(BaseHTTPRequestHandler):
   """Publish the loopback-only bot panel through the site's TLS endpoint."""
   path=urlparse(self.path).path
   if not BOT_ADMIN_PATH or not (path==BOT_ADMIN_PATH or path.startswith(BOT_ADMIN_PATH+'/')):return False
-  length=int(self.headers.get('Content-Length','0') or 0)
-  if length>1024*1024:return bool(self.sendx(413,'Запрос слишком большой.','text/plain; charset=utf-8') is None)
+  try:length=int(self.headers.get('Content-Length','0') or 0)
+  except ValueError:length=-1
+  if not 0<=length<=1024*1024:return bool(self.sendx(413,'Некорректный размер запроса.','text/plain; charset=utf-8') is None)
   body=self.rfile.read(length) if length else None
   headers={key:value for key,value in self.headers.items() if key.lower() not in ('host','connection','content-length','transfer-encoding','x-forwarded-for','x-real-ip')}
   headers['Host']='127.0.0.1:8090';headers['X-Real-IP']=self.request_ip();headers['X-Forwarded-Proto']='https' if TLS_CERT or PUBLIC.startswith('https://') else 'http'
@@ -1095,7 +1115,8 @@ class H(BaseHTTPRequestHandler):
    connection=http.client.HTTPConnection('127.0.0.1',8090,timeout=15);connection.request(self.command,self.path,body,headers);response=connection.getresponse();payload=response.read()
    self.send_response(response.status)
    for key,value in response.getheaders():
-    if key.lower() not in ('connection','transfer-encoding','content-length','server','date'):self.send_header(key,value)
+    if key.lower() not in ('connection','transfer-encoding','content-length','server','date','strict-transport-security'):self.send_header(key,value)
+   if PUBLIC.startswith('https://'):self.send_header('Strict-Transport-Security','max-age=31536000; includeSubDomains')
    self.send_header('Content-Length',str(len(payload)));self.send_header('X-Content-Type-Options','nosniff');self.end_headers()
    if self.command!='HEAD':self.wfile.write(payload)
   except OSError:
@@ -1455,7 +1476,11 @@ class H(BaseHTTPRequestHandler):
   if p=='/admin/maintenance':
    if not self.isadmin():return self.sendx(403,'forbidden')
    with db() as c:notices=c.execute('SELECT *, (SELECT count(*) FROM maintenance_deliveries d WHERE d.notice_id=maintenance_notices.id) delivered FROM maintenance_notices ORDER BY id DESC LIMIT 50').fetchall()
-   rows=''.join(f"<tr><td>#{n['id']}</td><td>{'Плановые' if n['kind']=='planned' else 'Внеплановые'}</td><td>{html.escape(n['message']).replace(chr(10),'<br>')}</td><td>{'Активно' if n['status']=='active' else 'Завершено'}</td><td>{n['delivered']}</td><td>{time.strftime('%d.%m.%Y %H:%M',time.localtime(n['created_at']))}</td><td>{'—' if n['status']=='active' else f'''<form method=post action=/admin/maintenance/delete onsubmit="return confirm('Удалить запись #{n['id']} из истории технических работ?')"><input type=hidden name=notice_id value={n['id']}><button class=delbtn>Удалить</button></form>'''}</td></tr>" for n in notices) or '<tr><td colspan=7>Объявлений ещё нет</td></tr>'
+   rows=''
+   for n in notices:
+    action='—' if n['status']=='active' else f'''<form method=post action=/admin/maintenance/delete onsubmit="return confirm('Удалить запись #{n['id']} из истории технических работ?')"><input type=hidden name=notice_id value={n['id']}><button class=delbtn>Удалить</button></form>'''
+    rows+=f"<tr><td>#{n['id']}</td><td>{'Плановые' if n['kind']=='planned' else 'Внеплановые'}</td><td>{html.escape(n['message']).replace(chr(10),'<br>')}</td><td>{'Активно' if n['status']=='active' else 'Завершено'}</td><td>{n['delivered']}</td><td>{time.strftime('%d.%m.%Y %H:%M',time.localtime(n['created_at']))}</td><td>{action}</td></tr>"
+   rows=rows or '<tr><td colspan=7>Объявлений ещё нет</td></tr>'
    forms="""<div class=card><h2>Создать уведомление</h2><form method=post action=/admin/maintenance/start><label>Тип работ</label><select name=kind><option value=unplanned>Внеплановые</option><option value=planned>Плановые</option></select><label>Сообщение и сроки</label><textarea name=message minlength=5 maxlength=2000 required placeholder="Опишите работы и укажите сроки"></textarea><button class=btn>Опубликовать уведомление</button></form><div class=admin-actions><form method=post action=/admin/maintenance/complete onsubmit="return confirm('Завершить все активные уведомления?')"><button class=approvebtn>Завершить активные работы</button></form><form method=post action=/admin/maintenance/clear onsubmit="return confirm('Удалить всю историю завершённых технических работ? Это действие нельзя отменить.')"><button class=delbtn>Очистить завершённые</button></form></div></div>"""
    return self.sendx(200,page('Технические работы',f"<section class=hero><h1>Технические работы</h1><p>Уведомление появится на сайте и будет отправлено ботом активным подписчикам.</p></section>{forms}<br><div class=card><h2>История уведомлений</h2><div class=tablewrap><table><tr><th>ID</th><th>Тип</th><th>Сообщение</th><th>Статус</th><th>Доставлено</th><th>Создано</th><th>Действие</th></tr>{rows}</table></div></div>",True))
   if p=='/status':
@@ -1596,7 +1621,12 @@ class H(BaseHTTPRequestHandler):
    form=f'''<div class="card box"><span class=eyebrow>{'Редактирование' if current else 'Новый тариф'}</span><h2>{html.escape(current['name']) if current else 'Создание тарифа'}</h2><form method=post action=/admin/tariffs/save><input type=hidden name=tariff_id value={current['id'] if current else ''}><label>Название для клиента</label><input name=name value="{html.escape(current['name'],quote=True) if current else ''}" placeholder="Например: 1 месяц" required><label>Короткий служебный код</label><input name=code pattern="[a-zA-Z0-9_-]+" value="{html.escape(current['code'],quote=True) if current else ''}" placeholder=m1 required><small>Латиница, цифры, <code>_</code> и <code>-</code>. После продажи лучше не менять.</small><div class=user-detail-grid><div><label>Цена, {html.escape(CURRENCY)}</label><input type=number name=price min=0 value={current['price'] if current else 100} required></div><div><label>Срок, дней</label><input type=number name=days min=1 value={current['days'] if current else 30} required></div><div><label>Количество устройств</label><input type=number name=devices min=1 max=100 value={current['devices'] if current else 1} required></div><div><label>Трафик, ГБ</label><input type=number name=traffic_gb min=0 value={current['traffic_gb'] if current else 0}><small>0 — без лимита</small></div></div><details><summary>Дополнительные параметры</summary><label>Начало действия</label><input type=datetime-local name=effective_at value="{effective}" required><label>Кому доступен</label><select name=personal_user_id>{user_options}</select><label class=consent><input type=checkbox name=renewal value=1 {'checked' if not current or current['renewal'] else ''}> Можно использовать для продления</label><label class=consent><input type=checkbox name=trial value=1 {'checked' if current and current['trial'] else ''}> Это пробный тариф</label></details><label class=consent><input type=checkbox name=active value=1 {'checked' if not current or current['active'] else ''}> Сразу показать на сайте и в Telegram-боте</label><button class=btn>{'Сохранить изменения' if current else 'Создать тариф'}</button><a class="btn soft backbtn" href=/admin/tariffs>Отмена</a></form></div>''' if current or show_new else ''
    preview_html=''
    if preview:preview_html=f'''<div class="card pricing-card"><span class=eyebrow>Предварительный просмотр</span><h2>{html.escape(preview['name'])}</h2><div class=price>{preview['price']} {html.escape(CURRENCY)}</div><ul><li>{preview['days']} дней</li><li>{preview['devices']} устройств</li><li>{'Без лимита трафика' if not preview['traffic_gb'] else str(preview['traffic_gb'])+' ГБ трафика'}</li></ul><button class=btn disabled>Перейти к оплате</button></div>'''
-   promo_rows=''.join(f'<tr><td>{html.escape(x["code"])}</td><td>{str(x["discount_percent"])+"%" if x["discount_percent"] else str(x["discount_amount"])+" "+CURRENCY}</td><td>{x["used_count"]}{" / "+str(x["max_uses"]) if x["max_uses"] else ""}</td><td>{"Активен" if x["active"] else "Выключен"}<form method=post action=/admin/promos/toggle><input type=hidden name=promo_id value={x['id']}><input type=hidden name=active value={0 if x['active'] else 1}><button class=navbtn>{'Выключить' if x['active'] else 'Включить'}</button></form></td></tr>' for x in promos) or '<tr><td colspan=4>Промокодов нет</td></tr>'
+   promo_rows=''
+   for x in promos:
+    discount=str(x['discount_percent'])+'%' if x['discount_percent'] else str(x['discount_amount'])+' '+CURRENCY
+    usage=str(x['used_count'])+(' / '+str(x['max_uses']) if x['max_uses'] else '')
+    promo_rows+=f'''<tr><td>{html.escape(x['code'])}</td><td>{discount}</td><td>{usage}</td><td>{'Активен' if x['active'] else 'Выключен'}<form method=post action=/admin/promos/toggle><input type=hidden name=promo_id value={x['id']}><input type=hidden name=active value={0 if x['active'] else 1}><button class=navbtn>{'Выключить' if x['active'] else 'Включить'}</button></form></td></tr>'''
+   promo_rows=promo_rows or '<tr><td colspan=4>Промокодов нет</td></tr>'
    promo_form=f'''<div class=card><h2>Скидки и промокоды</h2><form method=post action=/admin/promos/save><label>Промокод</label><input name=code maxlength=32 required><div class=user-detail-grid><div><label>Скидка, %</label><input type=number name=discount_percent min=0 max=100 value=0></div><div><label>Или фиксированная скидка</label><input type=number name=discount_amount min=0 value=0></div><div><label>Максимум использований, 0 — без лимита</label><input type=number name=max_uses min=0 value=0></div></div><button class=btn>Создать промокод</button></form><div class=tablewrap><table><tr><th>Код</th><th>Скидка</th><th>Использовано</th><th>Статус</th></tr>{promo_rows}</table></div></div>'''
    promo_section=promo_form if show_promos else ''
    toolbar=f'''<div class=admin-actions><a class=btn href=/admin/tariffs?new=1>＋ Новый тариф</a><a class="btn soft" href="/admin/tariffs?section=promos">🏷 Промокоды</a><a class="btn soft" href="/admin/tariffs?view={'active' if show_archived else 'archived'}">{'← Активные' if show_archived else '🗃 Архив'}</a></div>'''
@@ -1829,8 +1859,11 @@ class H(BaseHTTPRequestHandler):
  def do_POST(self):
   p=urlparse(self.path).path
   if self.bot_admin_proxy():return
+  if not p.startswith('/api/') and not self.same_origin():return self.sendx(403,'Неверный источник запроса.','text/plain; charset=utf-8')
   if self.limited('auth' if p in ('/login','/register','/2fa-login','/switch/user') or p==ADMIN_ENTRY else 'general'):return
-  if int(self.headers.get('Content-Length','0') or 0)>1024*1024:return self.sendx(413,'Запрос слишком большой.','text/plain; charset=utf-8')
+  try:length=int(self.headers.get('Content-Length','0') or 0)
+  except ValueError:length=-1
+  if not 0<=length<=1024*1024:return self.sendx(413,'Некорректный размер запроса.','text/plain; charset=utf-8')
   d=self.data()
   if p=='/api/payments/yookassa/webhook':
    event=str(d.get('event') or '');payment=d.get('object') or {};provider_id=str(payment.get('id') or '')
@@ -2792,6 +2825,8 @@ class H(BaseHTTPRequestHandler):
   self.sendx(404,'not found')
  def log_message(self,*a):pass
 if __name__=='__main__':
+ if APP_ENV=='production' and (API_SECRET=='change-me' or SESSION==b'change-me' or ADMIN_PASSWORD=='change-me'):
+  raise SystemExit('Production secrets must be configured; default change-me values are forbidden')
  init();resume_mail_campaigns();threading.Thread(target=scheduled_worker,daemon=True).start();ThreadingHTTPServer.request_queue_size=128;ThreadingHTTPServer.daemon_threads=True;server=ThreadingHTTPServer((BIND,PORT),H)
  if TLS_CERT or TLS_KEY:
   if not TLS_CERT or not TLS_KEY:raise SystemExit('TLS_CERT и TLS_KEY должны быть указаны вместе')

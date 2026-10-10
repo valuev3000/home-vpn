@@ -4,7 +4,7 @@
 Run after 3x-ui is installed. Secrets are written only to /etc and never to
 the repository configuration file.
 """
-import argparse, getpass, grp, json, os, pathlib, secrets, shutil, ssl, subprocess, sys, tempfile, urllib.request
+import argparse, getpass, grp, ipaddress, json, os, pathlib, re, secrets, shutil, subprocess, sys, tempfile, urllib.request
 from urllib.parse import urlparse
 
 from home_vpn_config import ENV_SCHEMAS, PROJECT_VERSION, default_config, merge_env, validate_project_config
@@ -48,6 +48,17 @@ def save(path,data):
 def validate(data):
     return validate_project_config(data)
 
+def public_url(value):
+    try:parsed=urlparse(value);port=parsed.port
+    except ValueError as error:raise SystemExit('Некорректный публичный URL') from error
+    host=parsed.hostname or ''
+    try:ipaddress.ip_address(host);valid_host=True
+    except ValueError:valid_host=bool(re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?',host))
+    if parsed.scheme not in ('http','https') or not valid_host or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('','/'):
+        raise SystemExit('Публичный URL не должен содержать credentials, path, query или fragment')
+    if port is not None and not 1<=port<=65535:raise SystemExit('Недопустимый порт публичного URL')
+    return parsed
+
 def branding_wizard(data):
     branding=data.setdefault('branding',{})
     branding['name']=ask('Название сервиса',branding.get('name','HOME-VPN'))
@@ -59,7 +70,7 @@ def discover_node(node,token):
     url=str(node.get('panel_url') or '').rstrip('/')
     if not url or not token:return []
     req=urllib.request.Request(url+'/panel/api/inbounds/list',headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
-    with urllib.request.urlopen(req,context=ssl._create_unverified_context(),timeout=20) as response:result=json.loads(response.read())
+    with urllib.request.urlopen(req,timeout=20) as response:result=json.loads(response.read())
     if not result.get('success',True):raise RuntimeError(str(result.get('msg') or '3x-ui вернула ошибку'))
     routes=[]
     for inbound in result.get('obj') or []:
@@ -206,7 +217,7 @@ def install(config_path):
     run('chown','root:vpnshop',str(config_path.parent),str(config_path));run('chmod','770',str(config_path.parent));run('chmod','660',str(config_path))
     pathlib.Path('/opt/vpn-shop').mkdir(parents=True,exist_ok=True);pathlib.Path('/srv/home-vpn/assets').mkdir(parents=True,exist_ok=True);pathlib.Path('/var/lib/vpn-shop').mkdir(parents=True,exist_ok=True)
     install_component_files('site',ROOT);shutil.copy2(__file__,'/usr/local/sbin/home-vpn-setup');os.chmod('/usr/local/sbin/home-vpn-setup',0o750)
-    public=install_answer('public_url','Публичный домен или URL сайта','https://vpn.my.domain.ru');public=public if '://' in public else 'https://'+public;public=public.rstrip('/');parsed=urlparse(public);public_port=parsed.port or (443 if parsed.scheme=='https' else 80)
+    public=install_answer('public_url','Публичный домен или URL сайта','https://vpn.my.domain.ru');public=public if '://' in public else 'https://'+public;public=public.rstrip('/');parsed=public_url(public);public_port=parsed.port or (443 if parsed.scheme=='https' else 80)
     detected=next(((cert,key) for cert,key in tls_candidates() if pathlib.Path(cert).is_file() and pathlib.Path(key).is_file()),('',''))
     cert=key=''
     if parsed.scheme=='https':
@@ -262,7 +273,7 @@ def install(config_path):
                     print(f"Получено из {node.get('name')}: inbound {','.join(map(str,node['inbound_ids']))}; маршрутов {len(routes)}")
             except Exception as error:print(f"Предупреждение: не удалось получить данные {node.get('name')}: {error}")
     save(config_path,data)
-    write_env(pathlib.Path('/etc/vpn-shop.env'),env);run('chown','-R','vpnshop:vpnshop','/var/lib/vpn-shop','/opt/vpn-shop')
+    write_env(pathlib.Path('/etc/vpn-shop.env'),env);run('chown','-R','vpnshop:vpnshop','/var/lib/vpn-shop');run('chown','-R','root:root','/opt/vpn-shop');run('chmod','755','/opt/vpn-shop');run('chmod','644','/opt/vpn-shop/app.py')
     if direct:install_reverse_proxy(public,cert,key)
     if telegram_token:
         run('useradd','--system','--home','/var/lib/vpn-bot','--shell','/usr/sbin/nologin','vpnshopbot',check=False)
@@ -271,7 +282,7 @@ def install(config_path):
         if not menu_config.exists():shutil.copy2(ROOT/'config/vpn-bot-menu.example.json',menu_config)
         run('chown','root:vpnshopbot',str(menu_config));os.chmod(menu_config,0o640)
         bot_env={'TELEGRAM_BOT_TOKEN':telegram_token,'TELEGRAM_ADMIN_ID':telegram_admin_id or '0','TELEGRAM_CHANNEL':telegram_channel,'TELEGRAM_PROXY_URL':telegram_proxy_url,'SHOP_API_URL':'http://127.0.0.1:8080','PUBLIC_BASE_URL':public,'SHOP_API_SECRET':api_secret,'ADMIN_PANEL_URL':public+admin_entry,'BOT_STATE_FILE':'/var/lib/vpn-bot/last_event_v2','PAYMENT_TIMERS_STATE':'/var/lib/vpn-bot/payment_timers.json','BOT_MENU_CONFIG':str(menu_config),'BOT_RUNTIME_CONFIG':'/var/lib/vpn-bot/runtime.json'}
-        write_env(pathlib.Path('/etc/vpn-bot.env'),bot_env);run('chown','-R','vpnshopbot:vpnshopbot','/var/lib/vpn-bot','/opt/vpn-bot')
+        write_env(pathlib.Path('/etc/vpn-bot.env'),bot_env);run('chown','-R','vpnshopbot:vpnshopbot','/var/lib/vpn-bot');run('chown','-R','root:root','/opt/vpn-bot');run('chmod','755','/opt/vpn-bot')
         write_env(pathlib.Path('/etc/vpn-bot-admin.env'),{'BOT_PANEL_BIND':'127.0.0.1','BOT_PANEL_PORT':'8090','BOT_PANEL_USER':bot_panel_user,'BOT_PANEL_PASSWORD':bot_panel_password,'BOT_PANEL_SECRET':secrets.token_urlsafe(48),'BOT_PANEL_ENTRY_PATH':bot_panel_entry,'BOT_PANEL_SECURE_COOKIE':'1'})
     run('systemctl','daemon-reload');run('systemctl','enable','--now','vpn-shop');run('systemctl','enable','--now','home-vpn-healthcheck.timer','home-vpn-system-check.timer','home-vpn-site-backup.timer');run('systemctl','start','home-vpn-system-check.service')
     if pathlib.Path('/usr/local/bin/kit').exists():run('systemctl','enable','--now','home-vpn-kit-backup.timer')

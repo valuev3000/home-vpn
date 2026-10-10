@@ -14,7 +14,7 @@ def run(arguments,input_text=None):
 
 
 def ssh(target,script):
-    result=run(["ssh",target,"bash","-s"],script)
+    result=run(["ssh","--",target,"bash","-s"],script)
     if result.returncode:raise RuntimeError(f"{target}: {result.stderr.strip() or result.stdout.strip()}")
     return result.stdout
 

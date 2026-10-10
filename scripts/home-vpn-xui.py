@@ -8,7 +8,6 @@ import json
 import os
 import pathlib
 import secrets
-import ssl
 import tempfile
 import urllib.request
 import uuid
@@ -36,7 +35,7 @@ def yes(prompt, default=False):
 def api(url, token, method, path, body=None):
     request = urllib.request.Request(url.rstrip("/") + path, data=json.dumps(body).encode() if body is not None else None,
         method=method, headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
-    with urllib.request.urlopen(request, timeout=20, context=ssl._create_unverified_context()) as response: return json.load(response)
+    with urllib.request.urlopen(request, timeout=20) as response: return json.load(response)
 
 
 def x25519_pair():
