@@ -32,5 +32,8 @@ class SmokePlanTests(unittest.TestCase):
         exec(SCRIPT.read_text(encoding="utf-8").replace("if __name__==\"__main__\":main()", ""),namespace)
         self.assertEqual("local-ok",namespace["ssh"]("local","printf local-ok"))
 
+    def test_public_check_retries_startup_window(self):
+        self.assertIn("for attempt in range(9)", SCRIPT.read_text(encoding="utf-8"))
+
 
 if __name__=="__main__":unittest.main()

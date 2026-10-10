@@ -977,7 +977,7 @@ systemctl reload nginx
 
 def smoke_public_route(topology):
     url=topology["site"]["public_url"].rstrip("/")
-    command="curl --fail --silent --show-error --max-time 20 "+shlex.quote(url+"/health")
+    command="curl --fail --silent --show-error --max-time 20 --retry 8 --retry-delay 2 --retry-all-errors "+shlex.quote(url+"/health")
     result=ssh_script(topology["site"]["ssh_host"],command+"\n",capture=True)
     try:payload=json.loads(result.stdout)
     except json.JSONDecodeError as error:raise RuntimeError("public_url вернул не HOME-VPN /health") from error

@@ -6,6 +6,7 @@ import json
 import pathlib
 import shlex
 import subprocess
+import time
 import urllib.request
 
 
@@ -21,8 +22,16 @@ def ssh(target,script):
 
 
 def check_public(url):
-    with urllib.request.urlopen(url.rstrip("/")+"/health",timeout=20) as response:payload=json.load(response)
-    if response.status!=200 or payload.get("ok") is not True:raise RuntimeError("public_url не вернул HOME-VPN /health")
+    error = None
+    for attempt in range(9):
+        try:
+            with urllib.request.urlopen(url.rstrip("/")+"/health",timeout=20) as response:
+                payload=json.load(response)
+            if response.status==200 and payload.get("ok") is True:return
+        except Exception as caught:
+            error = caught
+        if attempt < 8:time.sleep(2)
+    raise RuntimeError("public_url не вернул HOME-VPN /health") from error
 
 
 def smoke(topology):
