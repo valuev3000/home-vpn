@@ -219,9 +219,30 @@ def check_dns(domain, expected_ip):
         raise SystemExit(f"DNS {domain} указывает на {found}, ожидался {expected_ip}")
 
 
+def resolved_ipv4(domain):
+    try:
+        return {
+            item[4][0] for item in socket.getaddrinfo(
+                domain, 443, family=socket.AF_INET, type=socket.SOCK_STREAM,
+            )
+        }
+    except socket.gaierror as error:
+        raise SystemExit(f"DNS {domain} не разрешается: {error}") from error
+
+
+def detect_public_ipv4(site_domain, panel_domain):
+    shared = resolved_ipv4(site_domain) & resolved_ipv4(panel_domain)
+    if not shared:
+        raise SystemExit("Домены сайта и панели должны иметь общую IPv4 A-запись этой VPS")
+    address = sorted(shared, key=lambda value: tuple(map(int, value.split("."))))[0]
+    return str(ipaddress.IPv4Address(address))
+
+
 def detected_ssh_port():
     connection = os.environ.get("SSH_CONNECTION", "").split()
-    return connection[3] if len(connection) == 4 and connection[3].isdigit() else "22"
+    if len(connection) == 4 and connection[3].isdigit() and 1 <= int(connection[3]) <= 65535:
+        return connection[3]
+    return "22"
 
 
 def existing_xui_detected():
@@ -352,14 +373,13 @@ def build_topology(*, public_ip, site_domain, panel_domain, country, node_name,
 def collect_answers():
     print("\nHOME-VPN — локальная установка одной VPS\n")
     xui_install_mode=choose_xui_mode()
-    public_ip = str(ipaddress.IPv4Address(ask("Публичный IPv4 этой VPS")))
-    ssh_port = ask("SSH-порт этой VPS", detected_ssh_port())
-    if not ssh_port.isdigit() or not 1 <= int(ssh_port) <= 65535:
-        raise SystemExit("SSH-порт должен быть числом от 1 до 65535")
     site_domain = validate_domain(ask("Домен сайта, без https://"), "Домен сайта")
     panel_domain = validate_domain(ask("Домен панели 3x-ui, без https://"), "Домен панели")
     if site_domain == panel_domain:
         raise SystemExit("Для сайта и 3x-ui нужны два разных домена")
+    public_ip = detect_public_ipv4(site_domain, panel_domain)
+    ssh_port = detected_ssh_port()
+    print(f"Определено автоматически: IPv4 {public_ip}, SSH-порт {ssh_port}")
     cert_email = validate_email(ask("Email для Let's Encrypt"))
     country = ask("Код страны ноды", "DE").upper()
     if not re.fullmatch(r"[A-Z]{2}", country):

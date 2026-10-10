@@ -33,6 +33,32 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             MODULE.validate_https_url("http://example.com/install.sh")
 
+    def test_public_ip_comes_from_shared_domain_address(self):
+        original = MODULE.resolved_ipv4
+        MODULE.resolved_ipv4 = lambda domain: {
+            "vpn.example.com": {"203.0.113.10", "203.0.113.11"},
+            "panel.example.com": {"203.0.113.10"},
+        }[domain]
+        try:
+            self.assertEqual(
+                "203.0.113.10",
+                MODULE.detect_public_ipv4("vpn.example.com", "panel.example.com"),
+            )
+        finally:
+            MODULE.resolved_ipv4 = original
+
+    def test_public_ip_rejects_unrelated_domain_addresses(self):
+        original = MODULE.resolved_ipv4
+        MODULE.resolved_ipv4 = lambda domain: {
+            "vpn.example.com": {"203.0.113.10"},
+            "panel.example.com": {"203.0.113.11"},
+        }[domain]
+        try:
+            with self.assertRaisesRegex(SystemExit, "общую IPv4"):
+                MODULE.detect_public_ipv4("vpn.example.com", "panel.example.com")
+        finally:
+            MODULE.resolved_ipv4 = original
+
 
 class PlanTests(unittest.TestCase):
     def test_reads_only_explicit_env_assignments(self):
