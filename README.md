@@ -14,7 +14,7 @@ firewall, Telegram и проверка): [docs/installation.md](docs/installatio
 ## Рекомендуемая чистая установка
 
 Для одной новой VPS запустите локальный интерактивный мастер непосредственно на
-сервере. Он сам определит IP и SSH-порт, запросит оба домена, email TLS, параметры ноды,
+сервере. Он сам определит IP и SSH-порт, запросит email TLS, параметры ноды,
 Telegram и учётные данные, а затем установит зафиксированный по SHA-256 набор
 3x-ui, сайт, панели, резервное копирование и проверит публичный `/health`:
 
@@ -22,8 +22,13 @@ Telegram и учётные данные, а затем установит заф
 wget -qO home-vpn-install.sh \
   https://raw.githubusercontent.com/valuev3000/home-vpn/main/install-single-node.sh
 less home-vpn-install.sh
-sudo bash home-vpn-install.sh
+sudo bash home-vpn-install.sh \
+  --site-domain vpn.example.com \
+  --panel-domain panel.example.com
 ```
+
+На VPS с существующей 3x-ui оба домена определяются из её настроек и активных
+Nginx vhost, поэтому флаги доменов можно не указывать.
 
 DNS A-записи сайта и панели должны заранее указывать на VPS. Полный порядок и
 режим `--plan-only`: [docs/installation.md](docs/installation.md).

@@ -265,6 +265,67 @@ def choose_xui_mode():
     raise SystemExit("Допустимы варианты 1 или 2")
 
 
+def nginx_vhosts(nginx_root=pathlib.Path("/etc/nginx")):
+    result = {}
+    enabled = nginx_root / "sites-enabled"
+    files = enabled.glob("*") if enabled.is_dir() else nginx_root.glob("**/*.conf")
+    for item in files:
+        if not item.is_file():
+            continue
+        try:
+            text = item.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        for domain in re.findall(r"\bserver_name\s+([^;]+);", text):
+            for name in domain.split():
+                try:
+                    normalized = validate_domain(name, "server_name")
+                except SystemExit:
+                    continue
+                result.setdefault(normalized, (item.resolve(), text))
+    return result
+
+
+def detect_existing_domains(database=pathlib.Path("/etc/x-ui/x-ui.db"),
+                            nginx_root=pathlib.Path("/etc/nginx")):
+    import sqlite3
+
+    vhosts = nginx_vhosts(nginx_root)
+    if len(vhosts) < 2:
+        raise RuntimeError("Для автоопределения нужны два активных Nginx vhost")
+    connection = sqlite3.connect("file:" + str(database) + "?mode=ro", uri=True)
+    try:
+        settings = dict(connection.execute("SELECT key,value FROM settings"))
+    finally:
+        connection.close()
+    candidates = []
+    for key, value in settings.items():
+        if "cert" in str(key).lower() or "domain" in str(key).lower() or "host" in str(key).lower():
+            candidates.extend(re.findall(r"/live/([^/]+)/", str(value)))
+            candidates.extend(re.findall(r"(?:^|https?://)([A-Za-z0-9.-]+)(?:[:/]|$)", str(value)))
+    panel_scores = {}
+    base_path = str(settings.get("webBasePath") or "").strip("/")
+    web_port = str(settings.get("webPort") or "").strip()
+    for domain, (_, text) in vhosts.items():
+        score = 0
+        if domain in candidates:score += 20
+        if "panel" in domain.split(".")[0]:score += 8
+        if base_path and base_path in text:score += 4
+        if web_port and re.search(r"127\.0\.0\.1:" + re.escape(web_port) + r"\b", text):score += 3
+        panel_scores[domain] = score
+    ordered = sorted(panel_scores, key=lambda domain: (-panel_scores[domain], domain))
+    if len(ordered) < 2 or panel_scores[ordered[0]] == panel_scores[ordered[1]]:
+        raise RuntimeError("Не удалось однозначно определить домен панели 3x-ui")
+    panel_domain = ordered[0]
+    site_candidates = [domain for domain in vhosts if domain != panel_domain]
+    if len(site_candidates) != 1:
+        rooted = [domain for domain in site_candidates if re.search(r"\broot\s+[^;]+;", vhosts[domain][1])]
+        if len(rooted) != 1:
+            raise RuntimeError("Не удалось однозначно определить домен сайта-заглушки")
+        site_candidates = rooted
+    return site_candidates[0], panel_domain
+
+
 def find_preserved_vhost(domain, nginx_root=pathlib.Path("/etc/nginx")):
     candidates = (
         nginx_root / "sites-enabled" / domain,
@@ -370,13 +431,26 @@ def build_topology(*, public_ip, site_domain, panel_domain, country, node_name,
     }
 
 
-def collect_answers():
+def collect_answers(site_domain_override="", panel_domain_override=""):
     print("\nHOME-VPN — локальная установка одной VPS\n")
     xui_install_mode=choose_xui_mode()
-    site_domain = validate_domain(ask("Домен сайта, без https://"), "Домен сайта")
-    panel_domain = validate_domain(ask("Домен панели 3x-ui, без https://"), "Домен панели")
+    if not site_domain_override or not panel_domain_override:
+        if existing_xui_detected():
+            try:
+                detected_site, detected_panel = detect_existing_domains()
+                site_domain_override = site_domain_override or detected_site
+                panel_domain_override = panel_domain_override or detected_panel
+            except RuntimeError as error:
+                print(f"Автоопределение доменов не удалось: {error}")
+        if not panel_domain_override:
+            panel_domain_override = ask("Укажите домен 3x-ui")
+        if not site_domain_override:
+            site_domain_override = ask("Укажите домен сайта-заглушки")
+    site_domain = validate_domain(site_domain_override, "Домен сайта")
+    panel_domain = validate_domain(panel_domain_override, "Домен панели")
     if site_domain == panel_domain:
         raise SystemExit("Для сайта и 3x-ui нужны два разных домена")
+    print(f"Используются домены: сайт {site_domain}, 3x-ui {panel_domain}")
     public_ip = detect_public_ipv4(site_domain, panel_domain)
     ssh_port = detected_ssh_port()
     print(f"Определено автоматически: IPv4 {public_ip}, SSH-порт {ssh_port}")
@@ -477,11 +551,15 @@ def main():
                         help="куда сохранить JSON-план без секретов")
     parser.add_argument("--plan-only", action="store_true",
                         help="проверить DNS и сохранить план, не изменяя VPS")
+    parser.add_argument("--site-domain", default="",
+                        help="домен сайта для новой или нестандартной конфигурации")
+    parser.add_argument("--panel-domain", default="",
+                        help="домен 3x-ui для новой или нестандартной конфигурации")
     arguments = parser.parse_args()
     if os.geteuid() != 0:
         raise SystemExit("Запустите мастер от root: sudo bash install-single-node.sh")
 
-    answers = collect_answers()
+    answers = collect_answers(arguments.site_domain, arguments.panel_domain)
     check_dns(answers["site_domain"], answers["public_ip"])
     check_dns(answers["panel_domain"], answers["public_ip"])
     plan = build_topology(**answers)

@@ -59,6 +59,38 @@ class ValidationTests(unittest.TestCase):
         finally:
             MODULE.resolved_ipv4 = original
 
+    def test_existing_domains_are_discovered_without_prompts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            database = root / "x-ui.db"
+            connection = sqlite3.connect(database)
+            connection.execute("CREATE TABLE settings (key TEXT, value TEXT)")
+            connection.executemany("INSERT INTO settings VALUES (?,?)", (
+                ("webBasePath", "/secret-panel/"),
+                ("webPort", "2053"),
+                ("webCertFile", "/etc/letsencrypt/live/panel.example.com/fullchain.pem"),
+            ))
+            connection.commit(); connection.close()
+            enabled = root / "sites-enabled"; enabled.mkdir()
+            (enabled / "site").write_text(
+                "server { server_name vpn.example.com; root /var/www/html; }",
+                encoding="utf-8",
+            )
+            (enabled / "panel").write_text(
+                "server { server_name panel.example.com; location /secret-panel/ { proxy_pass http://127.0.0.1:2053; } }",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                ("vpn.example.com", "panel.example.com"),
+                MODULE.detect_existing_domains(database, root),
+            )
+
+    def test_domain_questions_exist_only_as_detection_fallback(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('ask("Укажите домен 3x-ui")', source)
+        self.assertIn('ask("Укажите домен сайта-заглушки")', source)
+        self.assertIn("Автоопределение доменов не удалось", source)
+
 
 class PlanTests(unittest.TestCase):
     def test_reads_only_explicit_env_assignments(self):
