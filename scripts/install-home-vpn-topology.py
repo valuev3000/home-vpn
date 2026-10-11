@@ -33,6 +33,7 @@ KIT_BASE_REMARKS = {
     "VMess-WS", "Shadowsocks", "TUIC", "AmneziaWG", "AmneziaWG-3.1",
 }
 CONFIRMATION = "INSTALL HOME VPN TOPOLOGY"
+REMOVE_CONFIRMATION = "DELETE HOME VPN TOPOLOGY"
 DEFAULT_KIT_URL = "https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/v1.2/scripts/3x-ui.sh"
 DEFAULT_KIT_SHA256 = "2d7a0f0dcc26ea4f8bab3d60e1900e7046a9673a88fef85c03630502120961f0"
 
@@ -1313,6 +1314,47 @@ def apply(topology):
     print("Установка и проверка ролей завершены")
 
 
+def update_managed(topology):
+    """Update project-owned files on every role without changing databases or secrets."""
+    check_servers(topology)
+    targets={topology["site"]["ssh_host"]}|{node["ssh_host"] for node in topology["nodes"]}
+    with tempfile.TemporaryDirectory(prefix="home-vpn-topology-update-") as temporary:
+        archive=str(pathlib.Path(temporary)/"source.tar.gz");build_source_archive(archive)
+        for target in sorted(targets):deploy_source(target,archive)
+    central=topology["site"]["ssh_host"]
+    components=["site"]+(["bot"] if bot_enabled(topology) else [])
+    ssh_command(central,["python3","/opt/home-vpn-source/scripts/home-vpn-manager.py","update",*components])
+    for node in topology["nodes"]:
+        install_xui_backup(node["ssh_host"])
+    for node in placeholder_nodes(topology):
+        ssh_command(node["ssh_host"],["python3","/opt/home-vpn-source/scripts/home-vpn-manager.py","update","placeholder"])
+    ssh_script(central,"systemctl is-active --quiet vpn-shop\n")
+    if bot_enabled(topology):ssh_script(central,"systemctl is-active --quiet vpn-bot vpn-bot-admin home-vpn-bot-egress\n")
+    for node in topology["nodes"]:ssh_script(node["ssh_host"],"systemctl is-active --quiet x-ui nginx home-vpn-kit-backup.timer\n")
+    smoke_public_route(topology)
+    print("Все управляемые роли HOME-VPN обновлены; базы, секреты и клиенты 3x-ui сохранены")
+
+
+def remove_managed(topology,purge=False):
+    """Remove only HOME-VPN-owned roles while preserving every 3x-ui node."""
+    check_servers(topology)
+    central=topology["site"]["ssh_host"]
+    for node in placeholder_nodes(topology):
+        ssh_command(
+            node["ssh_host"],
+            ["python3","/opt/home-vpn-source/scripts/home-vpn-manager.py","remove","placeholder",*(["--purge-data"] if purge else [])],
+            input_text="DELETE HOME-VPN\n",
+        )
+    configure_cascade({**topology,"mode":1}, {})
+    components=["site"]+(["bot"] if bot_enabled(topology) else [])
+    ssh_command(
+        central,
+        ["python3","/opt/home-vpn-source/scripts/home-vpn-manager.py","remove",*components,*(["--purge-data"] if purge else [])],
+        input_text="DELETE HOME-VPN\n",
+    )
+    print("HOME-VPN удалён со всех ролей; 3x-ui, inbounds, клиенты и её backup сохранены")
+
+
 def parse_arguments():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config",type=pathlib.Path,help="не содержащий секретов JSON-план")
@@ -1320,6 +1362,9 @@ def parse_arguments():
     parser.add_argument("--mode",type=int,choices=tuple(sorted(TOPOLOGY_MODES)),help="заранее выбранный режим архитектуры")
     parser.add_argument("--local-control-node",action="store_true",help="текущая VPS является управляющей нодой mode 1/2")
     parser.add_argument("--apply",action="store_true")
+    parser.add_argument("--update-managed",action="store_true",help="обновить HOME-VPN на всех ролях без изменения данных")
+    parser.add_argument("--remove-managed",action="store_true",help="удалить HOME-VPN со всех ролей, сохранив 3x-ui")
+    parser.add_argument("--purge-data",action="store_true",help="при удалении также удалить данные HOME-VPN")
     parser.add_argument("--confirm",default="")
     parser.add_argument("--interactive-confirm",action="store_true",help="запросить контрольную фразу после показа плана")
     return parser.parse_args()
@@ -1335,6 +1380,14 @@ def require_confirmation():
 
 def main():
     arguments=parse_arguments()
+    actions=sum(bool(value) for value in (arguments.apply,arguments.update_managed,arguments.remove_managed))
+    if actions>1:raise SystemExit("Выберите только одно действие: --apply, --update-managed или --remove-managed")
+    if (arguments.update_managed or arguments.remove_managed) and not arguments.config:
+        raise SystemExit("Для update/remove требуется существующий проверенный --config plan")
+    if arguments.purge_data and not arguments.remove_managed:
+        raise SystemExit("--purge-data допустим только вместе с --remove-managed")
+    if arguments.interactive_confirm and not arguments.apply:
+        raise SystemExit("--interactive-confirm допустим только вместе с --apply")
     if arguments.config and (arguments.mode is not None or arguments.local_control_node):
         raise SystemExit("--mode и --local-control-node используются только с интерактивным мастером без --config")
     topology=json.loads(arguments.config.read_text(encoding="utf-8")) if arguments.config else wizard(arguments.mode,arguments.local_control_node)
@@ -1343,6 +1396,11 @@ def main():
         arguments.write_plan.write_text(json.dumps(topology,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
         arguments.write_plan.chmod(0o600)
         print("План сохранён без паролей и токенов:",arguments.write_plan)
+    if arguments.update_managed:
+        update_managed(topology);return
+    if arguments.remove_managed:
+        if arguments.confirm!=REMOVE_CONFIRMATION:raise SystemExit(f"Для удаления добавьте --confirm {REMOVE_CONFIRMATION!r}")
+        remove_managed(topology,arguments.purge_data);return
     if arguments.apply and arguments.interactive_confirm:require_confirmation()
     if not arguments.apply or (arguments.confirm!=CONFIRMATION and not arguments.interactive_confirm):
         raise SystemExit("Dry-run: для установки добавьте --apply --confirm 'INSTALL HOME VPN TOPOLOGY'")

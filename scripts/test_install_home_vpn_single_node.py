@@ -34,6 +34,23 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("--local-control-node",command);self.assertEqual("2",command[command.index("--mode")+1])
         self.assertIn("--interactive-confirm",command)
 
+    def test_multinode_backup_runs_verified_backup_on_each_foreign_node(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plan=pathlib.Path(directory)/"plan.json"
+            plan.write_text(json.dumps({"mode":1,"nodes":[{"id":"ee-1","ssh_host":"root@edge.example.test"}]}),encoding="utf-8")
+            completed=__import__('subprocess').CompletedProcess([],0,stdout="/root/kit-backup-20260101.tar.gz\n")
+            with mock.patch.object(MODULE,"run",return_value=completed) as runner:
+                result=MODULE.backup_topology_nodes(plan)
+        self.assertEqual("ee-1",result[0][0]);self.assertEqual("ssh",runner.call_args.args[0][0])
+        self.assertIn("bash -s",runner.call_args.args[0])
+
+    def test_multinode_lifecycle_never_requests_xui_removal(self):
+        with mock.patch.object(MODULE,"run") as runner:
+            MODULE.run_topology_lifecycle("remove",pathlib.Path("/tmp/plan.json"),False)
+        command=runner.call_args.args[0]
+        self.assertIn("--remove-managed",command);self.assertNotIn("xui",command)
+        self.assertIn("DELETE HOME VPN TOPOLOGY",command)
+
     def test_lets_encrypt_does_not_request_email(self):
         source = SCRIPT.read_text(encoding="utf-8")
         self.assertNotIn('ask("Email для Let\'s Encrypt")', source)

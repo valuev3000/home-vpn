@@ -760,6 +760,75 @@ def run_multinode_installer(mode,plan_path,plan_only=False):
     if plan_only:print(f"План сохранён: {plan_path}\nVPS не изменялись.")
 
 
+def topology_plan(plan_path=DEFAULT_PLAN):
+    try:data=json.loads(pathlib.Path(plan_path).read_text(encoding="utf-8"))
+    except (OSError,json.JSONDecodeError) as error:raise SystemExit(f"Не удалось прочитать topology plan {plan_path}: {error}") from error
+    if int(data.get("mode",0)) not in (1,2,3):raise SystemExit("Topology plan содержит неизвестный mode")
+    return data
+
+
+def backup_topology_nodes(plan_path=DEFAULT_PLAN):
+    plan=topology_plan(plan_path);results=[]
+    if int(plan["mode"]) not in (1,2):return results
+    script=r'''set -Eeuo pipefail
+systemctl start home-vpn-kit-backup.service
+archive=$(find /root -maxdepth 1 -type f \( -name 'kit-backup-*.tar.gz' -o -name 'xui-backup-*.tar.gz' \) -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)
+test -n "$archive"
+(cd /root && sha256sum -c "$(basename "$archive").sha256" >/dev/null)
+tar -tzf "$archive" >/dev/null
+printf '%s\n' "$archive"
+'''
+    for node in plan.get("nodes") or []:
+        target=str(node.get("ssh_host") or "");node_id=str(node.get("id") or "node")
+        if not target or target=="local" or target.startswith("-") or not re.fullmatch(r"[A-Za-z0-9_.@:%\[\]-]+",target):
+            raise SystemExit(f"Небезопасный SSH target в topology plan: {target!r}")
+        result=run(["ssh","--",target,"bash -s"],input_text=script,capture=True,timeout=1800)
+        archive=result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+        if not archive.startswith("/root/"):raise RuntimeError(f"{node_id}: backup не вернул безопасный путь")
+        results.append((node_id,target,archive));print(f"Проверенный backup 3x-ui {node_id} ({target}): {archive}")
+    return results
+
+
+def run_topology_lifecycle(action,plan_path=DEFAULT_PLAN,purge=False):
+    if action not in ("update","remove"):raise ValueError("Неизвестное действие topology lifecycle")
+    command=[sys.executable,TOPOLOGY_INSTALLER,"--config",plan_path,"--update-managed" if action=="update" else "--remove-managed"]
+    if action=="remove":
+        command.extend(("--confirm","DELETE HOME VPN TOPOLOGY"))
+        if purge:command.append("--purge-data")
+    run(command,timeout=3600)
+
+
+def cleanup_local_launcher_files(purge=False,plan_path=DEFAULT_PLAN):
+    for path in (
+        "/opt/home-vpn-source", "/usr/local/share/home-vpn",
+        "/usr/local/sbin/home-vpn-manager", "/usr/local/sbin/home-vpn-setup",
+        "/usr/local/sbin/home-vpn-xui", "/usr/local/sbin/home-vpn-components",
+        "/usr/local/sbin/home-vpn-state-backup", "/usr/local/sbin/home_vpn_config.py",
+        "/usr/local/sbin/home_vpn_installer.py",
+        "/etc/letsencrypt/renewal-hooks/deploy/home-vpn-services",
+    ):
+        item=pathlib.Path(path)
+        if item.is_dir() and not item.is_symlink():shutil.rmtree(item)
+        else:item.unlink(missing_ok=True)
+    if purge:pathlib.Path(plan_path).unlink(missing_ok=True)
+
+
+def update_multinode_home_vpn(plan_path=DEFAULT_PLAN):
+    backup_before_lifecycle_change();backup_topology_nodes(plan_path)
+    run_topology_lifecycle("update",plan_path)
+    print("\nHOME-VPN обновлён на управляющей VPS и иностранных нодах; настройки и пользователи сохранены.")
+
+
+def remove_multinode_home_vpn(plan_path=DEFAULT_PLAN):
+    backup_before_lifecycle_change();backup_topology_nodes(plan_path)
+    print("Будут удалены сайт, панели HOME-VPN, бот, egress, cascade и edge-заглушки.")
+    print("3x-ui, её inbounds, клиенты, TLS и проверенные backup будут сохранены.")
+    require_confirmation("Подтвердите удаление распределённого HOME-VPN","DELETE HOME VPN TOPOLOGY")
+    purge=ask_yes_no("Удалить также базы HOME-VPN и его настройки?",False)
+    run_topology_lifecycle("remove",plan_path,purge)
+    cleanup_local_launcher_files(purge,plan_path)
+
+
 BACKUP_ALLOWED_ROOTS = (
     "etc/x-ui", "etc/nginx", "etc/letsencrypt", "etc/kit", "usr/local/x-ui",
     "etc/home-vpn", "etc/home-vpn-mail", "etc/vpn-shop.env", "etc/vpn-bot.env",
@@ -1076,19 +1145,7 @@ def remove_home_vpn():
     source = deploy_current_source()
     components = installed_managed_components()
     if components:manager_command(source, "remove", components, purge, "DELETE HOME-VPN")
-    for path in (
-        "/opt/home-vpn-source", "/usr/local/share/home-vpn",
-        "/usr/local/sbin/home-vpn-manager", "/usr/local/sbin/home-vpn-setup",
-        "/usr/local/sbin/home-vpn-xui", "/usr/local/sbin/home-vpn-components",
-        "/usr/local/sbin/home-vpn-state-backup", "/usr/local/sbin/home_vpn_config.py",
-        "/usr/local/sbin/home_vpn_installer.py",
-        "/etc/letsencrypt/renewal-hooks/deploy/home-vpn-services",
-    ):
-        item = pathlib.Path(path)
-        if item.is_dir() and not item.is_symlink():shutil.rmtree(item)
-        else:item.unlink(missing_ok=True)
-    if purge:
-        pathlib.Path("/root/home-vpn-topology.json").unlink(missing_ok=True)
+    cleanup_local_launcher_files(purge)
     print("HOME-VPN удалён. 3x-ui, VPN-подключения, сертификаты и проверенные backup сохранены.")
 
 
@@ -1109,11 +1166,22 @@ def main():
         raise SystemExit("Запустите мастер от root: sudo bash install-single-node.sh")
 
     action = arguments.action or choose_action()
+    installed_mode=saved_topology_mode(arguments.plan)
     if action == "exit":return
-    if action == "update":update_home_vpn(arguments.plan);return
-    if action == "backup":create_full_backup();return
-    if action == "restore":restore_full_backup(arguments.plan);return
-    if action == "remove":remove_home_vpn();return
+    if action == "update":
+        (update_multinode_home_vpn if installed_mode in (1,2) else update_home_vpn)(arguments.plan);return
+    if action == "backup":
+        create_full_backup()
+        if installed_mode in (1,2):backup_topology_nodes(arguments.plan)
+        return
+    if action == "restore":
+        if installed_mode in (1,2):
+            raise SystemExit("Распределённое восстановление автоматически не выполняется: восстановите центральный full backup и проверенные KIT backup каждой ноды по docs/backup-and-restore.md в окно работ.")
+        restore_full_backup(arguments.plan);return
+    if action == "remove":
+        if installed_mode in (1,2):remove_multinode_home_vpn(arguments.plan)
+        else:remove_home_vpn()
+        return
 
     topology_mode=choose_topology_mode(arguments.plan)
     current_mode=saved_topology_mode(arguments.plan)

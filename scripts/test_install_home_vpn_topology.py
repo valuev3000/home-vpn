@@ -155,6 +155,31 @@ class TopologyValidationTests(unittest.TestCase):
 
 
 class GeneratedConfigurationTests(unittest.TestCase):
+    def test_role_update_covers_control_node_edges_and_backup_units(self):
+        value=topology(1);commands=[];deployed=[];backups=[]
+        with mock.patch.object(MODULE,"check_servers"), \
+             mock.patch.object(MODULE,"build_source_archive"), \
+             mock.patch.object(MODULE,"deploy_source",side_effect=lambda target,_archive:deployed.append(target)), \
+             mock.patch.object(MODULE,"ssh_command",side_effect=lambda target,args,**_kwargs:commands.append((target,args))), \
+             mock.patch.object(MODULE,"install_xui_backup",side_effect=lambda target:backups.append(target)), \
+             mock.patch.object(MODULE,"ssh_script"), mock.patch.object(MODULE,"smoke_public_route"):
+            MODULE.update_managed(value)
+        self.assertEqual({"root@central.example.test","root@node-1.example.test"},set(deployed))
+        self.assertEqual(["root@node-1.example.test"],backups)
+        self.assertTrue(any(target=="root@central.example.test" and "site" in args for target,args in commands))
+        self.assertTrue(any(target=="root@node-1.example.test" and "placeholder" in args for target,args in commands))
+
+    def test_role_removal_cleans_cascade_and_preserves_xui(self):
+        value=topology(2);commands=[];cascade=[]
+        with mock.patch.object(MODULE,"check_servers"), \
+             mock.patch.object(MODULE,"ssh_command",side_effect=lambda target,args,**kwargs:commands.append((target,args,kwargs))), \
+             mock.patch.object(MODULE,"configure_cascade",side_effect=lambda plan,_inventories:cascade.append(plan)):
+            MODULE.remove_managed(value,False)
+        self.assertEqual(1,cascade[0]["mode"])
+        flattened=[item for _target,args,_kwargs in commands for item in args]
+        self.assertIn("placeholder",flattened);self.assertIn("site",flattened)
+        self.assertNotIn("xui",flattened)
+
     def test_api_token_parser_does_not_accept_other_output(self):
         self.assertEqual("secret-token",MODULE.parse_xui_api_token("notice\napiToken: secret-token\n"))
         with self.assertRaises(RuntimeError):MODULE.parse_xui_api_token("no token")
