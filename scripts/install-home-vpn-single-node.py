@@ -231,13 +231,13 @@ def validate_or_ask(value, prompt, validator):
 
 
 def ask_yes_no(prompt, default=True):
-    marker = "Д/н" if default else "д/Н"
+    marker = "Y/n" if default else "y/N"
     while True:
         value = input(f"{prompt} [{marker}]: ").strip().lower()
         if not value:return default
-        if value in ("д", "да", "y", "yes"):return True
-        if value in ("н", "нет", "n", "no"):return False
-        print("Ответьте да или нет")
+        if value in ("y", "yes"):return True
+        if value in ("n", "no"):return False
+        print("Enter y or n")
 
 
 def require_confirmation(prompt, expected):

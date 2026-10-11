@@ -37,7 +37,7 @@ class ValidationTests(unittest.TestCase):
             MODULE.ask = original
 
     def test_yes_no_question_repeats_after_invalid_input(self):
-        answers=iter(("возможно","да"));original=getattr(MODULE,"input",None)
+        answers=iter(("maybe","y"));original=getattr(MODULE,"input",None)
         MODULE.input=lambda _prompt:next(answers)
         try:self.assertTrue(MODULE.ask_yes_no("Продолжить?",False))
         finally:

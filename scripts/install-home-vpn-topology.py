@@ -88,13 +88,13 @@ def ask_int(prompt, default, minimum=1, maximum=None):
 
 
 def ask_yes_no(prompt, default=True):
-    marker="да" if default else "нет"
-    def validate(value):
-        normalized=str(value).strip().lower()
-        if normalized in ("да","д","yes","y"):return True
-        if normalized in ("нет","н","no","n"):return False
-        raise ValueError("Ответьте да или нет")
-    return ask_validated(prompt,marker,validate)
+    marker="Y/n" if default else "y/N"
+    while True:
+        value=ask(f"{prompt} [{marker}]").strip().lower()
+        if not value:return default
+        if value in ("y","yes"):return True
+        if value in ("n","no"):return False
+        print("Enter y or n")
 
 
 def valid_ip(value, label):
