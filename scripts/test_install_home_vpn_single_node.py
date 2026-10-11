@@ -137,6 +137,16 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("validate_or_ask",source)
         self.assertIn("Автоопределение доменов не удалось", source)
 
+    def test_healthcheck_waits_for_slow_application_start(self):
+        healthcheck=(SCRIPT.parent/"home-vpn-healthcheck.sh").read_text(encoding="utf-8")
+        setup=(SCRIPT.parent/"home-vpn-setup.py").read_text(encoding="utf-8")
+        self.assertIn('while [ "$attempt" -le 15 ]',healthcheck)
+        self.assertIn("run('/usr/local/sbin/home-vpn-healthcheck')",setup)
+        self.assertLess(
+            setup.index("run('/usr/local/sbin/home-vpn-healthcheck')"),
+            setup.index("run('systemctl','enable','--now','home-vpn-healthcheck.timer'"),
+        )
+
 
 class PlanTests(unittest.TestCase):
     def test_lifecycle_menu_supports_install_update_backup_restore_and_remove(self):

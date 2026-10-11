@@ -19,5 +19,14 @@ if /usr/bin/curl $insecure --fail --silent --show-error --max-time 8 "$health_ur
 fi
 
 /usr/bin/systemctl restart vpn-shop.service
-/bin/sleep 3
-/usr/bin/curl $insecure --fail --silent --show-error --max-time 8 "$health_url" >/dev/null
+attempt=1
+while [ "$attempt" -le 15 ]; do
+    if /usr/bin/curl $insecure --fail --silent --show-error --max-time 8 "$health_url" >/dev/null; then
+        exit 0
+    fi
+    attempt=$((attempt + 1))
+    /bin/sleep 2
+done
+
+echo "vpn-shop did not become healthy after restart: $health_url" >&2
+exit 1

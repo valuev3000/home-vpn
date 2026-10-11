@@ -284,7 +284,11 @@ def install(config_path):
         bot_env={'TELEGRAM_BOT_TOKEN':telegram_token,'TELEGRAM_ADMIN_ID':telegram_admin_id or '0','TELEGRAM_CHANNEL':telegram_channel,'TELEGRAM_PROXY_URL':telegram_proxy_url,'SHOP_API_URL':'http://127.0.0.1:8080','PUBLIC_BASE_URL':public,'SHOP_API_SECRET':api_secret,'ADMIN_PANEL_URL':public+admin_entry,'BOT_STATE_FILE':'/var/lib/vpn-bot/last_event_v2','PAYMENT_TIMERS_STATE':'/var/lib/vpn-bot/payment_timers.json','BOT_MENU_CONFIG':str(menu_config),'BOT_RUNTIME_CONFIG':'/var/lib/vpn-bot/runtime.json'}
         write_env(pathlib.Path('/etc/vpn-bot.env'),bot_env);run('chown','-R','vpnshopbot:vpnshopbot','/var/lib/vpn-bot');run('chown','-R','root:root','/opt/vpn-bot');run('chmod','755','/opt/vpn-bot')
         write_env(pathlib.Path('/etc/vpn-bot-admin.env'),{'BOT_PANEL_BIND':'127.0.0.1','BOT_PANEL_PORT':'8090','BOT_PANEL_USER':bot_panel_user,'BOT_PANEL_PASSWORD':bot_panel_password,'BOT_PANEL_SECRET':secrets.token_urlsafe(48),'BOT_PANEL_ENTRY_PATH':bot_panel_entry,'BOT_PANEL_SECURE_COOKIE':'1'})
-    run('systemctl','daemon-reload');run('systemctl','enable','--now','vpn-shop');run('systemctl','enable','--now','home-vpn-healthcheck.timer','home-vpn-system-check.timer','home-vpn-site-backup.timer');run('systemctl','start','home-vpn-system-check.service')
+    run('systemctl','daemon-reload');run('systemctl','enable','--now','vpn-shop')
+    # Persistent timers may fire immediately when first enabled. Wait until the
+    # application is ready so the health-check cannot race its initial start.
+    run('/usr/local/sbin/home-vpn-healthcheck')
+    run('systemctl','enable','--now','home-vpn-healthcheck.timer','home-vpn-system-check.timer','home-vpn-site-backup.timer');run('systemctl','start','home-vpn-system-check.service')
     if pathlib.Path('/usr/local/bin/kit').exists():run('systemctl','enable','--now','home-vpn-kit-backup.timer')
     if telegram_token:run('systemctl','enable','--now','vpn-bot','vpn-bot-admin','home-vpn-bot-backup.timer')
     print('\nHOME-VPN установлен: '+public);print('Редактор: sudo home-vpn-setup configure');print('Проверка: sudo home-vpn-setup doctor')
