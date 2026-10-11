@@ -46,6 +46,15 @@ class ValidationTests(unittest.TestCase):
         self.assertTrue(result[0][3].startswith("/root/home-vpn-bot-full-"))
         self.assertIn("bash -s",runner.call_args.args[0])
 
+    def test_three_vps_backup_includes_dedicated_bot_host(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plan=pathlib.Path(directory)/"plan.json"
+            plan.write_text(json.dumps({"mode":1,"nodes":[{"id":"vps3","ssh_host":"root@203.0.113.13","ssh_port":2203}],"telegram_bot":{"enabled":True,"placement":"bot-vps","ssh_host":"root@203.0.113.12","ssh_port":2202}}),encoding="utf-8")
+            outputs=["XUI=/root/xui-backup-20260101.tar.gz\n","BOT=/var/backups/home-vpn/home-vpn-vps2-bot-full-20260101.tar.gz\n"]
+            with mock.patch.object(MODULE,"run",side_effect=[__import__('subprocess').CompletedProcess([],0,stdout=value) for value in outputs]) as runner:
+                result=MODULE.backup_topology_nodes(plan)
+        self.assertEqual("vps2-bot",result[1][0]);self.assertEqual(2202,int(runner.call_args.args[0][2]))
+
     def test_multinode_lifecycle_never_requests_xui_removal(self):
         with mock.patch.object(MODULE,"run") as runner:
             MODULE.run_topology_lifecycle("remove",pathlib.Path("/tmp/plan.json"),False)
@@ -207,7 +216,9 @@ class PlanTests(unittest.TestCase):
         self.assertIn('"2": "update"', source)
         self.assertIn('"3": "backup"', source)
         self.assertIn('"4": "restore"', source)
-        self.assertIn('"5": "remove"', source)
+        self.assertIn('"5": "check"', source)
+        self.assertIn('"6": "remove"', source)
+        self.assertIn('"2": "check"', source)
         self.assertIn("RESTORE HOME VPN", source)
         self.assertIn("DELETE HOME-VPN", source)
         self.assertIn("3x-ui, её inbounds и пользовательские клиенты удаляться не будут", source)

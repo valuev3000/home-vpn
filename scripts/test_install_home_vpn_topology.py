@@ -37,6 +37,52 @@ def topology(mode=1, nodes=1):
 
 
 class TopologyValidationTests(unittest.TestCase):
+    def test_ssh_command_keeps_nonstandard_port_separate_from_target(self):
+        MODULE.SSH_PORTS.clear();MODULE.SSH_PORTS["root@203.0.113.12"]=2222
+        with mock.patch.object(MODULE,"run") as runner:
+            MODULE.ssh_command("root@203.0.113.12",["id","-u"])
+        command=runner.call_args.args[0]
+        self.assertEqual(["ssh","-p","2222","--","root@203.0.113.12","id -u"],command)
+
+    def test_three_role_targets_include_dedicated_bot_vps(self):
+        value=topology(1);value["site"]["ssh_host"]="local"
+        value["telegram_bot"]={"enabled":True,"placement":"bot-vps","ssh_host":"root@203.0.113.12","address":"203.0.113.12"}
+        self.assertEqual({"local":"vps1-site","root@203.0.113.12":"vps2-bot","root@node-1.example.test":"vps2-xui-foreign-1"},MODULE.topology_targets(value))
+
+    def test_first_vpn_node_can_also_host_bot(self):
+        value=topology(1,2);value["site"]["ssh_host"]="local"
+        value["telegram_bot"]={"enabled":True,"placement":"foreign-1"}
+        targets=MODULE.topology_targets(value)
+        self.assertEqual("vps2-bot-xui-foreign-1",targets["root@node-1.example.test"])
+        self.assertEqual("vps3-xui-foreign-2",targets["root@node-2.example.test"])
+
+    def test_distributed_wizard_accepts_additional_xui_nodes(self):
+        completed=__import__('subprocess').CompletedProcess([],0,stdout="0\n")
+        with mock.patch.object(MODULE,"ask_ssh_endpoint",side_effect=[("root@203.0.113.12",22),("root@203.0.113.13",2203)]), \
+             mock.patch.object(MODULE,"ask_int",return_value=1), \
+             mock.patch.object(MODULE,"ask_validated",return_value="vpn.example.test"), \
+             mock.patch.object(MODULE,"run",return_value=completed), \
+             mock.patch.object(MODULE,"discover_xui_domains",side_effect=[{"panel":"panel2.example.test","sni":"cover2.example.test"},{"panel":"panel3.example.test","sni":"cover3.example.test"}]), \
+             mock.patch.object(MODULE,"local_service_address",return_value="203.0.113.10"), \
+             mock.patch.object(MODULE,"ask",return_value="2"):
+            value=MODULE.three_vps_wizard()
+        self.assertEqual(2,len(value["nodes"]));self.assertEqual("vps2",value["telegram_bot"]["placement"])
+        self.assertTrue(all(node["expected_inbounds"]==11 for node in value["nodes"]))
+
+    def test_prechange_backup_rejects_unverified_result(self):
+        value=topology(1);value["telegram_bot"]={"enabled":False}
+        completed=type("Result",(),{"stdout":'{"archive":"/tmp/a.tar.gz","sha256":"bad"}\n'})()
+        with mock.patch.object(MODULE,"ssh_command",return_value=completed):
+            with self.assertRaisesRegex(RuntimeError,"backup не прошёл"):
+                MODULE.create_prechange_backups(value)
+
+    def test_preserved_nodes_require_all_eleven_active_inbounds(self):
+        value=topology(1);value["xui_install_mode"]="preserve";value["nodes"][0]["expected_inbounds"]=11
+        completed=type("Result",(),{"stdout":'{"count":10,"active":10,"integrity":"ok"}\n'})()
+        with mock.patch.object(MODULE,"ssh_python",return_value=completed):
+            with self.assertRaisesRegex(RuntimeError,"11 активных inbounds"):
+                MODULE.preflight_existing_xui_nodes(value)
+
     def test_ssh_bootstrap_skips_password_when_key_already_works(self):
         completed=__import__('subprocess').CompletedProcess([],0,stdout="0\n")
         with mock.patch.object(MODULE,"run",return_value=completed) as runner:
@@ -100,10 +146,24 @@ class TopologyValidationTests(unittest.TestCase):
         finally:
             MODULE.ask = original
 
-    def test_preserve_is_limited_to_single_server(self):
+    def test_preserve_supports_existing_remote_xui(self):
         value=topology(3);value["xui_install_mode"]="preserve";MODULE.validate_topology(value)
         value=topology(1);value["xui_install_mode"]="preserve"
-        with self.assertRaisesRegex(SystemExit,"только для mode 3"):MODULE.validate_topology(value)
+        MODULE.validate_topology(value)
+
+    def test_dedicated_bot_vps_and_ssh_ports_are_validated(self):
+        value=topology(1)
+        value["telegram_bot"]={"enabled":True,"placement":"bot-vps","ssh_host":"root@203.0.113.12","ssh_port":2222,"address":"203.0.113.12"}
+        value["nodes"][0]["ssh_port"]=2203
+        MODULE.validate_topology(value);MODULE.configure_ssh_ports(value)
+        self.assertEqual(2222,MODULE.SSH_PORTS["root@203.0.113.12"])
+        self.assertEqual(2203,MODULE.SSH_PORTS["root@node-1.example.test"])
+
+    def test_dedicated_bot_vps_must_not_reuse_vpn_node(self):
+        value=topology(1)
+        value["telegram_bot"]={"enabled":True,"placement":"bot-vps","ssh_host":value["nodes"][0]["ssh_host"]}
+        with self.assertRaisesRegex(SystemExit,"должна отличаться"):
+            MODULE.validate_topology(value)
 
     def test_local_target_is_valid_for_single_server(self):
         value = topology(3)

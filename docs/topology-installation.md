@@ -1,5 +1,49 @@
 # Установка HOME-VPN по одной из трёх архитектур
 
+## Рекомендуемая production-схема с произвольным числом VPS
+
+Для новой установки запускайте на VPS-1:
+
+```bash
+curl -fsSLo /tmp/home-vpn-install.sh https://raw.githubusercontent.com/valuev3000/home-vpn/main/install-single-node.sh
+sudo bash /tmp/home-vpn-install.sh
+```
+
+Мастер фиксирует VPS-1 (текущую) как HTTPS-сайт, кабинет и API. VPS-2 — первая
+зарубежная 3x-ui/Xray-нода с 11 подключениями, Telegram-ботом, `bot-admin` на
+`127.0.0.1:8090` и Telegram-only egress. VPS-3 и далее — дополнительные
+существующие 3x-ui-ноды с заглушками. Число VPN-нод не ограничено; бот при
+необходимости можно назначить на любую из них.
+
+До изменений выполняются read-only аудит и полный backup каждой роли. Архивы в
+`/var/backups/home-vpn` имеют режим `0600` и проверяются через `tar -tzf`,
+`PRAGMA integrity_check` и `sha256sum -c`. Ошибка останавливает установку. План
+`/root/home-vpn-topology.json` не содержит Telegram Bot Token, API_SECRET,
+пароли или API-токены 3x-ui.
+
+Если вход по ключу отсутствует, `ssh-copy-id` показывает стандартный prompt
+OpenSSH. Python не читает и не сохраняет SSH-пароль. Нестандартный SSH-порт
+хранится отдельным числовым полем плана и не склеивается с target.
+
+Панель бота публикуется только по закрытому HTTPS path сайта VPS-1: постоянный
+loopback SSH-туннель соединяет VPS-1 с `127.0.0.1:8090` выбранной VPN-ноды. Telegram Bot API
+идёт через локальный HTTP-proxy Xray; второе routing-правило отправляет любой
+иной трафик этого inbound в `blackhole`, поэтому прямого fallback нет. MTProto
+остаётся отдельным аварийным inbound выбранной VPN-ноды и ботом не используется.
+
+Read-only проверку можно запускать отдельно:
+
+```bash
+sudo python3 scripts/install-home-vpn-topology.py --distributed --audit-only
+sudo python3 scripts/install-home-vpn-topology.py --config /root/home-vpn-topology.json --audit-only
+sudo python3 scripts/smoke-home-vpn-topology.py --config /root/home-vpn-topology.json
+```
+
+Если отдельный Nginx vhost панели 3x-ui не удаётся однозначно найти, мастер
+останавливается и не меняет случайный vhost или VPN routing. При успехе vhost
+панели получает ACL `allow <VPS-1>; deny all;`, проходит `nginx -t`, а исходный
+файл сохраняется с суффиксом `.pre-home-vpn-panel-acl`.
+
 Сценарий `scripts/install-home-vpn-topology.py` можно запускать с рабочей станции,
 которая имеет root SSH-доступ ко всем VPS, либо через единую команду установки
 непосредственно на центральной VPS. Во втором случае управляющая нода обозначается
@@ -7,9 +51,10 @@
 иностранным VPN-нодам. GitHub во время применения плана не используется: на
 ноды передаётся снимок текущего каталога проекта.
 
-Готовый мастер `install-single-node.sh`, несмотря на историческое имя, теперь
-предлагает все три режима. В modes 1/2 он запускает topology installer с текущей
-VPS как управляющей; в mode 3 создаёт план с общей целью `local`. Его использование описано в
+Готовый мастер `install-single-node.sh`, несмотря на историческое имя, для новой
+установки запускает описанную выше распределённую схему. Универсальные modes
+1/2/3 остаются доступны через `install-home-vpn-topology.py` и для уже созданных
+планов. Использование мастера описано в
 [основной инструкции](installation.md#быстрая-интерактивная-установка-на-vps).
 На VPS с существующей современной 3x-ui план получает
 `"xui_install_mode": "preserve"`: KIT не устанавливается, а действующие

@@ -709,17 +709,40 @@ def choose_action():
     details = ", ".join(installation_markers())
     state = f"HOME-VPN обнаружен ({details})" if installed else "HOME-VPN не установлен"
     print(f"\n{state}. Выберите действие:")
-    print("  1 — установить или повторно настроить")
-    print("  2 — обновить HOME-VPN, сохранив настройки и пользователей")
-    print("  3 — создать полный backup сайта, 3x-ui и Telegram-бота")
-    print("  4 — восстановить настройки сайта, 3x-ui и Telegram-бота из backup")
-    print("  5 — удалить HOME-VPN, сохранив 3x-ui и её клиентов")
-    print("  0 — выйти без изменений")
-    actions = {"1": "install", "2": "update", "3": "backup", "4": "restore", "5": "remove", "0": "exit"}
+    if installed:
+        print("  1 — повторно настроить роли")
+        print("  2 — обновить HOME-VPN с сохранением пользователей и настроек")
+        print("  3 — создать полный backup всех VPS")
+        print("  4 — восстановить backup")
+        print("  5 — проверить состояние и безопасность")
+        print("  6 — удалить только HOME-VPN, сохранив 3x-ui и клиентов")
+        actions = {"1": "install", "2": "update", "3": "backup", "4": "restore", "5": "check", "6": "remove", "0": "exit"}
+    else:
+        print("  1 — установить и настроить HOME-VPN")
+        print("  2 — проверить инфраструктуру без изменений")
+        print("  3 — восстановить из backup")
+        actions = {"1": "install", "2": "check", "3": "restore", "0": "exit"}
+    print("  0 — выйти")
     while True:
         choice = ask("Действие", "2" if installed else "1")
         if choice in actions:return actions[choice]
-        print("Допустимы варианты 0, 1, 2, 3, 4 или 5")
+        print("Выберите один из показанных пунктов")
+
+
+def run_three_vps_installer(plan_path,plan_only=False):
+    command=[sys.executable,TOPOLOGY_INSTALLER,"--distributed"]
+    if plan_only:command.append("--audit-only")
+    else:command.extend(("--write-plan",plan_path,"--apply","--interactive-confirm","--bootstrap-ssh"))
+    run(command,timeout=7200)
+
+
+def check_three_vps(plan_path=DEFAULT_PLAN):
+    command=[sys.executable,TOPOLOGY_INSTALLER,"--audit-only"]
+    has_plan=pathlib.Path(plan_path).is_file()
+    if has_plan:command.extend(("--config",plan_path))
+    else:command.append("--distributed")
+    run(command,timeout=600)
+    if has_plan:run([sys.executable,SMOKE_TEST,"--config",plan_path],timeout=600)
 
 
 def saved_topology_mode(plan_path=DEFAULT_PLAN):
@@ -801,12 +824,39 @@ fi
         target=str(node.get("ssh_host") or "");node_id=str(node.get("id") or "node")
         if not target or target=="local" or target.startswith("-") or not re.fullmatch(r"[A-Za-z0-9_.@:%\[\]-]+",target):
             raise SystemExit(f"Небезопасный SSH target в topology plan: {target!r}")
-        result=run(["ssh","--",target,"bash -s"],input_text=script,capture=True,timeout=1800)
+        port=int(node.get("ssh_port",22))
+        if not 1<=port<=65535:raise SystemExit(f"{node_id}: недопустимый SSH port")
+        result=run(["ssh","-p",str(port),"--",target,"bash -s"],input_text=script,capture=True,timeout=1800)
         paths=dict(line.split("=",1) for line in result.stdout.splitlines() if "=" in line)
         archive=paths.get("XUI","");bot_archive=paths.get("BOT","")
         if not archive.startswith("/root/") or (bot_archive and not bot_archive.startswith("/root/")):raise RuntimeError(f"{node_id}: backup не вернул безопасный путь")
         results.append((node_id,target,archive,bot_archive));print(f"Проверенный backup 3x-ui {node_id} ({target}): {archive}")
         if bot_archive:print(f"Полный backup Telegram-бота {node_id} ({target}): {bot_archive}")
+    bot=plan.get("telegram_bot") or {}
+    if bot.get("enabled",True) and bot.get("placement")=="bot-vps":
+        target=str(bot.get("ssh_host") or "");port=int(bot.get("ssh_port",22))
+        if not re.fullmatch(r"[A-Za-z0-9_.@:%\[\]-]+",target) or not 1<=port<=65535:
+            raise SystemExit("Небезопасный SSH target/port VPS-2 в topology plan")
+        bot_script=r'''set -Eeuo pipefail
+umask 077
+test -s /etc/vpn-bot.env
+install -d -m 0700 /var/backups/home-vpn
+stamp=$(date -u +%Y%m%d-%H%M%S)
+archive="/var/backups/home-vpn/home-vpn-vps2-bot-full-${stamp}.tar.gz"
+items="etc/vpn-bot.env"
+for item in etc/vpn-bot-admin.env etc/vpn-bot-menu.json etc/home-vpn var/lib/vpn-bot opt/vpn-bot etc/systemd/system/vpn-bot.service etc/systemd/system/vpn-bot-admin.service etc/systemd/system/home-vpn-bot-egress.service; do
+ [ ! -e "/$item" ] || items="$items $item"
+done
+tar -C / -czf "$archive" $items
+tar -tzf "$archive" >/dev/null
+(cd "$(dirname "$archive")" && sha256sum "$(basename "$archive")" >"$(basename "$archive").sha256" && sha256sum -c "$(basename "$archive").sha256" >/dev/null)
+chmod 0600 "$archive" "${archive}.sha256"
+printf 'BOT=%s\n' "$archive"
+'''
+        result=run(["ssh","-p",str(port),"--",target,"bash -s"],input_text=bot_script,capture=True,timeout=1800)
+        bot_archive=next((line.split("=",1)[1] for line in result.stdout.splitlines() if line.startswith("BOT=/var/backups/home-vpn/")),"")
+        if not bot_archive:raise RuntimeError("VPS-2: backup Telegram-бота не прошёл проверку")
+        results.append(("vps2-bot",target,"",bot_archive));print(f"Полный backup Telegram-бота VPS-2 ({target}): {bot_archive}")
     return results
 
 
@@ -1180,7 +1230,7 @@ def main():
                         help="домен сайта для новой или нестандартной конфигурации")
     parser.add_argument("--panel-domain", default="",
                         help="домен 3x-ui для новой или нестандартной конфигурации")
-    parser.add_argument("--action", choices=("install", "update", "backup", "restore", "remove"),
+    parser.add_argument("--action", choices=("install", "update", "backup", "restore", "check", "remove"),
                         help="выбрать действие без стартового меню")
     arguments = parser.parse_args()
     if os.geteuid() != 0:
@@ -1189,6 +1239,8 @@ def main():
     action = arguments.action or choose_action()
     installed_mode=saved_topology_mode(arguments.plan)
     if action == "exit":return
+    if action == "check":
+        check_three_vps(arguments.plan);return
     if action == "update":
         (update_multinode_home_vpn if installed_mode in (1,2) else update_home_vpn)(arguments.plan);return
     if action == "backup":
@@ -1204,6 +1256,10 @@ def main():
         else:remove_home_vpn()
         return
 
+    if arguments.plan_only:
+        check_three_vps(arguments.plan);return
+    if not home_vpn_installed() or saved_topology_mode(arguments.plan) in (1,2):
+        run_three_vps_installer(arguments.plan);return
     topology_mode=choose_topology_mode(arguments.plan)
     current_mode=saved_topology_mode(arguments.plan)
     if home_vpn_installed() and current_mode and topology_mode!=current_mode:

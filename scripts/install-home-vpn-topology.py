@@ -36,6 +36,33 @@ CONFIRMATION = "INSTALL HOME VPN TOPOLOGY"
 REMOVE_CONFIRMATION = "DELETE HOME VPN TOPOLOGY"
 DEFAULT_KIT_URL = "https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/v1.2/scripts/3x-ui.sh"
 DEFAULT_KIT_SHA256 = "2d7a0f0dcc26ea4f8bab3d60e1900e7046a9673a88fef85c03630502120961f0"
+SSH_PORTS = {}
+
+
+def configure_ssh_ports(topology):
+    """Load per-target SSH ports without putting options inside user input."""
+    SSH_PORTS.clear()
+    site = topology.get("site") or {}
+    targets = [site, *(topology.get("nodes") or []), topology.get("telegram_bot") or {}]
+    for item in targets:
+        target = str(item.get("ssh_host") or "")
+        if not target or target == "local":
+            continue
+        try:port = int(item.get("ssh_port", 22))
+        except (TypeError,ValueError) as error:raise SystemExit(f"SSH port для {target}: требуется число") from error
+        if not 1 <= port <= 65535:
+            raise SystemExit(f"SSH port для {target}: допустимы значения 1..65535")
+        previous = SSH_PORTS.setdefault(target, port)
+        if previous != port:
+            raise SystemExit(f"Для {target} заданы разные SSH-порты")
+
+
+def ssh_options(target):
+    return ["-p", str(SSH_PORTS.get(target, 22))]
+
+
+def scp_options(target):
+    return ["-P", str(SSH_PORTS.get(target, 22))]
 
 
 def run(arguments, *, input_text=None, capture=False, timeout=None, check=True):
@@ -51,7 +78,7 @@ def ssh_command(target, arguments, *, input_text=None, capture=False, timeout=No
         return run(arguments, input_text=input_text, capture=capture, timeout=timeout)
     command = shlex.join([str(item) for item in arguments])
     return run(
-        ["ssh", "--", target, command], input_text=input_text,
+        ["ssh", *ssh_options(target), "--", target, command], input_text=input_text,
         capture=capture, timeout=timeout,
     )
 
@@ -140,6 +167,11 @@ def valid_ssh_target(value, label="SSH target"):
     return value
 
 
+def ssh_host_address(target):
+    host = str(target).rsplit("@", 1)[-1].strip("[]")
+    return valid_host(host, "SSH host")
+
+
 def valid_public_url(value, label="public_url"):
     try:parsed=urllib.parse.urlparse(str(value or ""));port=parsed.port
     except ValueError as error:raise SystemExit(f"{label}: некорректный URL") from error
@@ -174,6 +206,13 @@ def valid_host(value, label, dns_only=False):
     if "://" in value or not (valid_dns or valid_ip_address):
         suffix="DNS-имя без схемы и пути" if dns_only else "IP или DNS-имя без схемы и пути"
         raise ValueError(f"{label}: нужен {suffix}")
+    return value
+
+
+def valid_domain(value,label):
+    value=valid_host(value,label,True).rstrip(".").lower()
+    if "." not in value or len(value)>253:
+        raise ValueError(f"{label}: нужно полное DNS-имя")
     return value
 
 
@@ -320,6 +359,112 @@ def wizard(forced_mode=None, local_control_node=False):
     return topology
 
 
+def ask_ssh_endpoint(label):
+    def validate(value):
+        target=valid_ssh_target(value,label)
+        if not target.startswith("root@"):
+            raise ValueError(f"{label}: нужен адрес в формате root@IP")
+        valid_ip(target.split("@",1)[1].strip("[]"),label)
+        return target
+    target=ask_validated(label,"",validate)
+    port=22
+    if ask_yes_no(f"{label}: SSH-порт отличается от 22?",False):
+        port=ask_int(f"{label}: SSH-порт",22,1,65535)
+    return target,port
+
+
+def local_service_address(domain=""):
+    public=[]
+    for endpoint in ("https://api.ipify.org","https://api64.ipify.org"):
+        try:
+            value=urllib.request.urlopen(endpoint,timeout=8).read(128).decode().strip()
+            address=str(ipaddress.ip_address(value))
+            if address not in public:public.append(address)
+        except Exception:pass
+    if domain and public:
+        resolved={str(ipaddress.ip_address(row[4][0])) for row in __import__("socket").getaddrinfo(domain,443,type=__import__("socket").SOCK_STREAM)}
+        matching=next((address for address in public if address in resolved),None)
+        if not matching:
+            raise RuntimeError(f"DNS {domain} не указывает на публичный IP текущей VPS-1 ({', '.join(public)})")
+        return matching
+    if public:return public[0]
+    result=run(["hostname","-I"],capture=True,check=False)
+    for value in result.stdout.split():
+        try:
+            address=ipaddress.ip_address(value)
+            if not address.is_loopback:return str(address)
+        except ValueError:pass
+    raise RuntimeError("Не удалось автоматически определить IP текущей VPS-1")
+
+
+def discover_xui_domains(target):
+    code=r'''import json,pathlib,re,sqlite3
+result={"panel":"","sni":""};path=pathlib.Path('/etc/x-ui/x-ui.db')
+if path.is_file():
+ db=sqlite3.connect('file:'+str(path)+'?mode=ro',uri=True)
+ try:
+  settings=dict(db.execute('SELECT key,value FROM settings'))
+  result['panel']=str(settings.get('webDomain') or settings.get('webCertDomain') or '').strip()
+  for row in db.execute('SELECT stream_settings FROM inbounds ORDER BY id'):
+   try:value=json.loads(row[0] or '{}')
+   except Exception:continue
+   reality=(value.get('realitySettings') or {})
+   names=reality.get('serverNames') or []
+   candidate=(names[0] if names else reality.get('dest') or '').split(':',1)[0]
+   if re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]',candidate):result['sni']=candidate;break
+  if not result['panel']:
+   base=str(settings.get('webBasePath') or '').strip('/');port=str(settings.get('webPort') or '')
+   found=[]
+   for root in ('/etc/nginx/sites-enabled','/etc/nginx/sites-available','/etc/nginx/conf.d'):
+    for config in (pathlib.Path(root).glob('*') if pathlib.Path(root).is_dir() else ()):
+     if not config.is_file():continue
+     text=config.read_text(encoding='utf-8',errors='ignore')
+     if not ((base and base in text) or (port and re.search(r'127\.0\.0\.1:'+re.escape(port)+r'\b',text))):continue
+     for names in re.findall(r'\bserver_name\s+([^;]+);',text):
+      found.extend(name for name in names.split() if re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]',name))
+   if len(set(found))==1:result['panel']=found[0]
+ finally:db.close()
+print(json.dumps(result))
+'''
+    return json.loads(ssh_python(target,code,capture=True).stdout)
+
+
+def three_vps_wizard():
+    """Collect VPS-1 control plus an arbitrary number of existing 3x-ui nodes."""
+    print("Распределённая схема: текущая VPS = VPS-1; VPS-2 и далее = зарубежные 3x-ui-ноды")
+    first_ssh,first_port=ask_ssh_endpoint("SSH VPS-2 (root@IP)")
+    extra=ask_int("Количество дополнительных 3x-ui VPS (VPS-3 и далее)",0,0)
+    endpoints=[(first_ssh,first_port)]
+    for number in range(3,3+extra):endpoints.append(ask_ssh_endpoint(f"SSH VPS-{number} (root@IP)"))
+    temporary={"site":{"ssh_host":"local"},"nodes":[{"ssh_host":target,"ssh_port":port} for target,port in endpoints],"telegram_bot":{"enabled":False}}
+    configure_ssh_ports(temporary)
+    site_domain=ask_validated("Домен сайта VPS-1","",lambda value:valid_domain(value,"Домен сайта"))
+    nodes=[]
+    for offset,(target,port) in enumerate(endpoints,2):
+        probe=run(["ssh",*ssh_options(target),"-o","BatchMode=yes","-o","ConnectTimeout=8","--",target,"id -u"],capture=True,check=False)
+        discovered=discover_xui_domains(target) if probe.returncode==0 else {}
+        panel=discovered.get("panel") or ask_validated(f"Домен панели 3x-ui VPS-{offset}","",lambda value:valid_domain(value,f"Домен панели VPS-{offset}"))
+        sni=discovered.get("sni") or ask_validated(f"Домен заглушки/SNI VPS-{offset}","",lambda value:valid_domain(value,f"Домен заглушки/SNI VPS-{offset}"))
+        address=ssh_host_address(target)
+        nodes.append({"id":f"vps{offset}","name":f"Foreign VPN node VPS-{offset}","country":"EXT","flag":"🌐","ssh_host":target,"ssh_port":port,"address":address,"public_host":address,"api_host":panel,"sni":sni,"sni_mode":"preserve","expected_inbounds":11,"cert":"","key":""})
+    while True:
+        selected=ask(f"VPS для Telegram-бота (2..{len(nodes)+1})","2")
+        if selected.isdigit() and 2<=int(selected)<=len(nodes)+1:break
+        print(f"Нужно число от 2 до {len(nodes)+1}")
+    bot_node_id=nodes[int(selected)-2]["id"]
+    topology={
+        "mode":1,"xui_install_mode":"preserve",
+        "protocol_installer":{"url":DEFAULT_KIT_URL,"sha256":DEFAULT_KIT_SHA256},
+        "site":{"ssh_host":"local","ssh_port":22,"address":local_service_address(site_domain),"public_url":"https://"+site_domain,"tls_cert":"","tls_key":""},
+        "telegram_bot":{"enabled":True,"placement":bot_node_id,"admin_tunnel_port":18090},
+        "telegram_egress":{"listen":"127.0.0.1","port":18080,"strategy":"leastPing","probe_interval":"30s"},
+        "nodes":nodes,
+        "emergency_node":bot_node_id,
+    }
+    validate_topology(topology)
+    return topology
+
+
 def validate_topology(topology):
     mode = int(topology.get("mode", 0))
     if mode not in TOPOLOGY_MODES:
@@ -327,8 +472,6 @@ def validate_topology(topology):
     xui_mode = topology.get("xui_install_mode", "fresh")
     if xui_mode not in ("fresh", "preserve"):
         raise SystemExit("xui_install_mode должен быть fresh или preserve")
-    if xui_mode == "preserve" and mode != 3:
-        raise SystemExit("xui_install_mode=preserve поддерживается только для mode 3")
     installer = topology.get("protocol_installer") or {}
     if urllib.parse.urlparse(str(installer.get("url") or "")).scheme != "https":
         raise SystemExit("protocol_installer.url должен быть HTTPS-URL")
@@ -371,6 +514,10 @@ def validate_topology(topology):
             raise SystemExit(f"public_host ноды {index} указывается без http:// и https://")
         if bool(node.get("cert")) != bool(node.get("key")):
             raise SystemExit(f"Для ноды {index} cert и key указываются только вместе")
+        if node.get("expected_inbounds") is not None:
+            try:expected=int(node["expected_inbounds"])
+            except (TypeError,ValueError) as error:raise SystemExit(f"Нода {index}: expected_inbounds должен быть числом") from error
+            if expected<1:raise SystemExit(f"Нода {index}: expected_inbounds должен быть положительным числом")
     if bool(site.get("tls_cert")) != bool(site.get("tls_key")):
         raise SystemExit("site.tls_cert и site.tls_key указываются только вместе")
     if site.get("tls_cert"):
@@ -392,9 +539,14 @@ def validate_topology(topology):
     if topology.get("emergency_node") not in ids:
         raise SystemExit("emergency_node должен ссылаться на существующую ноду")
     placement=str(bot.get("placement") or "control")
-    if placement!="control" and placement not in ids:
-        raise SystemExit("telegram_bot.placement должен быть control или ID существующей иностранной ноды")
-    if bot.get("enabled",True) and placement!="control":
+    if placement!="control" and placement not in ids and placement!="bot-vps":
+        raise SystemExit("telegram_bot.placement должен быть control, bot-vps или ID существующей иностранной ноды")
+    if placement=="bot-vps":
+        valid_ssh_target(bot.get("ssh_host"),"telegram_bot.ssh_host")
+        if bot.get("address"):valid_host(bot["address"],"telegram_bot.address")
+        if bot.get("ssh_host") in targets:
+            raise SystemExit("Отдельная VPS для Telegram-бота должна отличаться от управляющей и VPN-нод")
+    if bot.get("enabled",True) and placement!="control" and placement!="bot-vps":
         selected=next(node for node in nodes if node["id"]==placement)
         address=ipaddress.ip_address(selected["address"])
         if site["ssh_host"]!="local" and (not address.is_private or address.is_unspecified or address.is_link_local):
@@ -428,7 +580,7 @@ def show_plan(topology):
 
 def ensure_ssh_key_access(target):
     if target=="local":return
-    probe=run(["ssh","-o","BatchMode=yes","-o","ConnectTimeout=8","--",target,"id -u"],capture=True,check=False)
+    probe=run(["ssh",*ssh_options(target),"-o","BatchMode=yes","-o","ConnectTimeout=8","--",target,"id -u"],capture=True,check=False)
     if probe.returncode==0:return
     ssh_dir=pathlib.Path.home()/".ssh";private_key=ssh_dir/"id_ed25519";public_key=ssh_dir/"id_ed25519.pub"
     ssh_dir.mkdir(mode=0o700,parents=True,exist_ok=True);ssh_dir.chmod(0o700)
@@ -436,18 +588,190 @@ def ensure_ssh_key_access(target):
         print(f"Создаётся SSH-ключ для автоматической настройки {target}")
         run(["ssh-keygen","-q","-t","ed25519","-N","","-f",private_key])
     print(f"Введите SSH-пароль для {target}. Он обрабатывается ssh-copy-id и не сохраняется HOME-VPN.")
-    run(["ssh-copy-id","-i",public_key,"-o","StrictHostKeyChecking=accept-new",target],timeout=180)
-    verified=run(["ssh","-o","BatchMode=yes","-o","ConnectTimeout=8","--",target,"id -u"],capture=True,check=False)
+    run(["ssh-copy-id","-i",public_key,"-p",str(SSH_PORTS.get(target,22)),"-o","StrictHostKeyChecking=accept-new",target],timeout=180)
+    verified=run(["ssh",*ssh_options(target),"-o","BatchMode=yes","-o","ConnectTimeout=8","--",target,"id -u"],capture=True,check=False)
     if verified.returncode or verified.stdout.strip()!="0":raise RuntimeError(f"{target}: не удалось настроить root SSH по ключу")
 
 
 def check_servers(topology,bootstrap_ssh=False):
     targets = {topology["site"]["ssh_host"]} | {node["ssh_host"] for node in topology["nodes"]}
+    if bot_enabled(topology):targets.add(bot_target(topology))
     for target in sorted(targets):
         if bootstrap_ssh:ensure_ssh_key_access(target)
         result = ssh_command(target, ["id", "-u"], capture=True)
         if result.stdout.strip() != "0":
             raise RuntimeError(f"{target}: для установки нужен root SSH")
+
+
+AUDIT_SCRIPT = r'''set -Eeuo pipefail
+python3 - <<'PY'
+import json,os,pathlib,platform,shutil,socket,subprocess
+def command(argv):
+ result=subprocess.run(argv,text=True,capture_output=True,check=False)
+ return {"rc":result.returncode,"output":(result.stdout or result.stderr).strip()[:16000]}
+services=command(["systemctl","list-unit-files","--type=service","--no-pager","--no-legend"])
+print(json.dumps({
+ "os":pathlib.Path('/etc/os-release').read_text(errors='replace') if pathlib.Path('/etc/os-release').is_file() else '',
+ "architecture":platform.machine(),"hostname":socket.getfqdn(),
+ "ssh":command(["sshd","-T"]) if shutil.which('sshd') else {"rc":127,"output":"not installed"},
+ "xui":{"database":pathlib.Path('/etc/x-ui/x-ui.db').is_file(),"service":command(["systemctl","is-active","x-ui"])},
+ "services":services,"nginx":command(["nginx","-T"]) if shutil.which('nginx') else {"rc":127,"output":"not installed"},
+ "ports":command(["ss","-lntup"]),
+ "ufw":command(["ufw","status","verbose"]) if shutil.which('ufw') else {"rc":127,"output":"not installed"},
+ "nftables":command(["nft","list","ruleset"]) if shutil.which('nft') else {"rc":127,"output":"not installed"},
+ "certificates":sorted(str(p) for p in pathlib.Path('/etc/letsencrypt/live').glob('*') if p.is_dir()),
+ "home_vpn":any(pathlib.Path(p).exists() for p in ('/etc/home-vpn','/etc/vpn-shop.env','/etc/vpn-bot.env','/opt/home-vpn-source')),
+},ensure_ascii=False))
+PY
+'''
+
+
+BACKUP_SCRIPT = r'''set -Eeuo pipefail
+role=$1
+umask 077
+install -d -m 0700 /var/backups/home-vpn
+stage=$(mktemp -d /var/backups/home-vpn/.prechange.XXXXXX)
+trap 'rm -rf -- "$stage"' EXIT
+for item in etc/x-ui etc/nginx etc/letsencrypt etc/home-vpn etc/vpn-shop.env \
+ etc/vpn-bot.env etc/vpn-bot-admin.env etc/vpn-bot-menu.json etc/nftables.conf \
+ etc/nftables.d etc/ufw etc/systemd/system var/lib/vpn-shop var/lib/vpn-bot \
+ opt/vpn-shop opt/vpn-bot opt/home-vpn-source srv/home-vpn; do
+ [ ! -e "/$item" ] || tar -C / -cf - "$item" | tar -C "$stage" -xf -
+done
+python3 - "$stage" "$role" <<'PY'
+import json,pathlib,sqlite3,sys,time
+root=pathlib.Path(sys.argv[1])
+for source_name in ('/etc/x-ui/x-ui.db','/var/lib/vpn-shop/shop.db'):
+ source=pathlib.Path(source_name)
+ if not source.is_file():continue
+ target=root/source.relative_to('/');target.parent.mkdir(parents=True,exist_ok=True)
+ db=sqlite3.connect('file:'+str(source)+'?mode=ro',uri=True);copy=sqlite3.connect(target)
+ db.backup(copy);copy.close();db.close()
+ check=sqlite3.connect('file:'+str(target)+'?mode=ro',uri=True)
+ result=check.execute('PRAGMA integrity_check').fetchone()[0];check.close()
+ if result!='ok':raise SystemExit(source_name+' integrity_check: '+str(result))
+(root/'manifest.json').write_text(json.dumps({'format':1,'type':'home-vpn-three-vps-prechange','role':sys.argv[2],'created_at':int(time.time())},indent=2)+'\n')
+PY
+stamp=$(date -u +%Y%m%d-%H%M%S)
+archive="/var/backups/home-vpn/home-vpn-${role}-prechange-${stamp}.tar.gz"
+tar -czf "$archive" -C "$stage" .
+tar -tzf "$archive" >/dev/null
+checksum=$(sha256sum "$archive" | cut -d' ' -f1)
+printf '%s  %s\n' "$checksum" "$(basename "$archive")" >"${archive}.sha256"
+(cd "$(dirname "$archive")" && sha256sum -c "$(basename "$archive").sha256" >/dev/null)
+chmod 0600 "$archive" "${archive}.sha256"
+printf '{"archive":"%s","sha256":"%s"}\n' "$archive" "$checksum"
+'''
+
+
+def topology_targets(topology):
+    targets={topology["site"]["ssh_host"]:"vps1-site"}
+    bot_host=bot_target(topology) if bot_enabled(topology) else ""
+    for index,node in enumerate(topology["nodes"],2):
+        roles=("bot-xui" if node["ssh_host"]==bot_host else "xui")
+        targets[node["ssh_host"]]=f"vps{index}-{roles}-"+safe_id(node["id"])
+    if bot_host and bot_host not in targets:targets[bot_host]="vps2-bot"
+    return targets
+
+
+def audit_servers(topology):
+    reports={}
+    dns_names={urllib.parse.urlparse(topology["site"]["public_url"]).hostname}
+    dns_names.update(str(node.get(key) or "") for node in topology["nodes"] for key in ("api_host","sni","public_host"))
+    for target,role in topology_targets(topology).items():
+        report=json.loads(ssh_script(target,AUDIT_SCRIPT,capture=True,timeout=120).stdout)
+        report["dns"]={}
+        for name in sorted(dns_names-{"",None}):
+            try:report["dns"][name]=sorted({row[4][0] for row in __import__("socket").getaddrinfo(name,443,type=__import__("socket").SOCK_STREAM)})
+            except OSError:report["dns"][name]=[]
+        os_release=report["os"]
+        ubuntu=bool(re.search(r'(?m)^ID=ubuntu$',os_release))
+        supported_version=bool(re.search(r'(?m)^VERSION_ID="?(22\.04|24\.04)"?$',os_release))
+        if not (ubuntu and supported_version):
+            raise RuntimeError(f"{role}: поддерживаются Ubuntu 22.04/24.04")
+        if "xui" in role and (not report["xui"]["database"] or report["xui"]["service"]["rc"]!=0):
+            raise RuntimeError(f"{role}: существующая рабочая 3x-ui не обнаружена")
+        if not report["dns"].get(urllib.parse.urlparse(topology["site"]["public_url"]).hostname):
+            raise RuntimeError("DNS домена сайта не разрешается")
+        reports[role]=report
+        print(f"Аудит {role} ({target}): OS/SSH/3x-ui/systemd/Nginx/ports/firewall/TLS/DNS/HOME-VPN собраны")
+    return reports
+
+
+def create_prechange_backups(topology):
+    backups={}
+    for target,role in topology_targets(topology).items():
+        result=ssh_command(target,["bash","-s","--",role],input_text=BACKUP_SCRIPT,capture=True,timeout=1800)
+        payload=json.loads(result.stdout.strip().splitlines()[-1])
+        expected_prefix=f"/var/backups/home-vpn/home-vpn-{role}-prechange-"
+        if not str(payload.get("archive") or "").startswith(expected_prefix) or not str(payload["archive"]).endswith(".tar.gz") or not re.fullmatch(r"[0-9a-f]{64}",payload.get("sha256", "")):
+            raise RuntimeError(f"{role}: backup не прошёл проверку")
+        backups[role]={"target":target,**payload}
+        print(f"Проверенный backup {role}: {payload['archive']} · SHA-256 {payload['sha256']}")
+    return backups
+
+
+def xui_fingerprint(node):
+    """Hash existing inbounds/clients while ignoring our deterministic service client."""
+    code=r'''import hashlib,json,sqlite3
+db=sqlite3.connect('file:/etc/x-ui/x-ui.db?mode=ro',uri=True)
+rows=[]
+for row in db.execute('SELECT id,remark,protocol,port,enable,settings,stream_settings FROM inbounds ORDER BY id'):
+ item=list(row)
+ try:
+  settings=json.loads(item[5] or '{}')
+  settings['clients']=[client for client in settings.get('clients',[]) if not str(client.get('email','')).startswith('homevpn-bot-egress-')]
+  item[5]=settings
+ except Exception:pass
+ rows.append(item)
+print(hashlib.sha256(json.dumps(rows,sort_keys=True,separators=(',',':')).encode()).hexdigest())
+'''
+    return ssh_python(node["ssh_host"],code,capture=True).stdout.strip()
+
+
+def preflight_preserved_panel_acl(topology):
+    if topology.get("xui_install_mode")!="preserve":return
+    site_host=urllib.parse.urlparse(topology["site"]["public_url"]).hostname
+    code=r'''import pathlib,re,sys
+host=sys.argv[1];matches=set()
+for path in pathlib.Path('/etc/nginx').glob('**/*'):
+ if not path.is_file():continue
+ try:text=path.read_text(encoding='utf-8',errors='ignore')
+ except OSError:continue
+ for match in re.finditer(r'(?m)^\s*server\s*\{',text):
+  depth=0;end=None
+  for index in range(match.end()-1,len(text)):
+   if text[index]=='{':depth+=1
+   elif text[index]=='}':
+    depth-=1
+    if depth==0:end=index+1;break
+  if end and re.search(r'(?m)^\s*server_name\s+[^;]*\b'+re.escape(host)+r'\b',text[match.start():end]):matches.add(str(path.resolve()))
+print(len(matches))
+'''
+    for node in topology["nodes"]:
+        host=str(node.get("api_host") or "")
+        if not host or host in (site_host,node.get("sni")):
+            raise RuntimeError(f"{node['id']}: нужен отдельный домен панели 3x-ui, не совпадающий с сайтом/SNI")
+        count=ssh_python(node["ssh_host"],code,[host],capture=True).stdout.strip()
+        if count!="1":raise RuntimeError(f"{node['id']}: нужен ровно один отдельный nginx vhost панели {host}; найдено {count}")
+
+
+def preflight_existing_xui_nodes(topology):
+    if topology.get("xui_install_mode")!="preserve":return
+    code=r'''import json,sqlite3
+db=sqlite3.connect('file:/etc/x-ui/x-ui.db?mode=ro',uri=True)
+count=db.execute('SELECT count(*) FROM inbounds').fetchone()[0]
+active=db.execute('SELECT count(*) FROM inbounds WHERE enable=1').fetchone()[0]
+integrity=db.execute('PRAGMA integrity_check').fetchone()[0];db.close()
+print(json.dumps({'count':count,'active':active,'integrity':integrity}))
+'''
+    for node in topology["nodes"]:
+        result=json.loads(ssh_python(node["ssh_host"],code,capture=True).stdout)
+        expected=node.get("expected_inbounds")
+        if result["integrity"]!="ok" or result["active"]<1:
+            raise RuntimeError(f"{node['id']}: нет активных inbounds или повреждена SQLite: active={result['active']}, integrity={result['integrity']}")
+        if expected is not None and (result["count"]!=int(expected) or result["active"]!=int(expected)):
+            raise RuntimeError(f"{node['id']}: требуется {int(expected)} активных inbounds и целая SQLite; найдено {result['active']}/{result['count']}, integrity={result['integrity']}")
 
 
 def build_source_archive(target):
@@ -481,7 +805,7 @@ def deploy_source(target, archive):
         run(["tar", "-xzf", archive, "-C", "/opt/home-vpn-source"])
         return
     remote = f"/tmp/home-vpn-source-{os.getpid()}.tar.gz"
-    run(["scp", "--", archive, f"{target}:{remote}"])
+    run(["scp", *scp_options(target), "--", archive, f"{target}:{remote}"])
     try:
         ssh_script(target, f'''set -Eeuo pipefail
 install -d -m 0750 /opt/home-vpn-source
@@ -512,7 +836,7 @@ def push_file(target, source, destination, mode):
         run(["install", "-m", f"{mode:o}", source, destination])
         return
     remote = f"/tmp/home-vpn-{os.getpid()}-{pathlib.Path(source).name}"
-    run(["scp", "--", source, f"{target}:{remote}"])
+    run(["scp", *scp_options(target), "--", source, f"{target}:{remote}"])
     try:
         ssh_script(target, f"install -m {mode:o} {shlex.quote(remote)} {shlex.quote(destination)}\n")
     finally:
@@ -650,6 +974,9 @@ print(json.dumps({"rows":rows,"integrity":integrity,"install_env":env.read_text(
         raise RuntimeError(f"{node['id']}: ожидалось ровно 11 подключений KIT, получено {len(data['rows'])}")
     if preserve and not any(bool(row.get("enable")) for row in data["rows"]):
         raise RuntimeError(f"{node['id']}: в существующей 3x-ui нет активных inbounds")
+    expected=node.get("expected_inbounds")
+    if expected is not None and len(data["rows"])!=int(expected):
+        raise RuntimeError(f"{node['id']}: ожидалось {int(expected)} inbounds, найдено {len(data['rows'])}; автоматические изменения остановлены")
     environment = parse_env(data.pop("install_env"))
     settings = data.pop("settings", {})
     token = token_override or environment.get("XUI_API_TOKEN", "")
@@ -1031,6 +1358,10 @@ def install_bot(topology, credentials):
     target=bot_target(topology);remote=target!=site["ssh_host"]
     selected=bot_node(topology)
     tunnelled=remote and site["ssh_host"]=="local"
+    # In the supported distributed flow the control node is local, therefore a
+    # remote bot is always loopback-only and reached through the SSH tunnel.
+    # Keep the older workstation-driven topology compatible with its private
+    # service-network bind.
     panel_bind="127.0.0.1" if tunnelled or not remote else selected["address"]
     answers = {
         "public_url": site["public_url"], "shop_api_url": site["public_url"] if remote else secrets["local_api"],
@@ -1084,6 +1415,7 @@ def install_bot_admin_tunnel(topology,target):
     """Expose a remote loopback bot-admin only to the local control VPS."""
     if topology["site"]["ssh_host"]!="local":raise RuntimeError("SSH bot-admin tunnel поддерживается только при запуске на управляющей VPS")
     port=int((topology.get("telegram_bot") or {}).get("admin_tunnel_port",18090))
+    ssh_port=SSH_PORTS.get(target,22)
     if not 1024<=port<=65535:raise RuntimeError("telegram_bot.admin_tunnel_port должен быть от 1024 до 65535")
     unit=f'''[Unit]
 Description=HOME-VPN secure tunnel to remote bot-admin
@@ -1091,7 +1423,7 @@ After=network-online.target
 Wants=network-online.target
 [Service]
 Type=simple
-ExecStart=/usr/bin/ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -L 127.0.0.1:{port}:127.0.0.1:8090 {target}
+ExecStart=/usr/bin/ssh -N -p {ssh_port} -o BatchMode=yes -o StrictHostKeyChecking=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -L 127.0.0.1:{port}:127.0.0.1:8090 {target}
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
@@ -1280,6 +1612,58 @@ if check.returncode:
     ssh_script(target,"set -Eeuo pipefail\nsystemctl reload nginx\n")
 
 
+def restrict_preserved_panel_to_control(topology):
+    """Restrict an existing 3x-ui HTTPS vhost to the VPS-1 source address."""
+    if topology.get("xui_install_mode")!="preserve":return
+    control_ip=valid_ip(topology["site"]["address"],"VPS-1 public address")
+    for node in topology["nodes"]:
+        host=str(node.get("api_host") or "")
+        if not host:raise RuntimeError(f"{node['id']}: не определён домен панели 3x-ui")
+        if host in (urllib.parse.urlparse(topology["site"]["public_url"]).hostname,node.get("sni")):
+            raise RuntimeError(f"{node['id']}: домен панели 3x-ui должен отличаться от сайта и SNI/заглушки")
+        code=r'''import os,pathlib,re,shutil,subprocess,sys,tempfile
+host,control=sys.argv[1:3];marker='# HOME-VPN panel ACL';candidates=[]
+for root in ('/etc/nginx/sites-enabled','/etc/nginx/sites-available','/etc/nginx/conf.d'):
+ for path in (pathlib.Path(root).glob('*.conf') if pathlib.Path(root).is_dir() else ()):
+  if path.is_file() and not path.is_symlink():candidates.append(path)
+for root in ('/etc/nginx/sites-enabled','/etc/nginx/sites-available'):
+ path=pathlib.Path(root)
+ if path.is_dir():candidates.extend(p for p in path.iterdir() if p.is_file() and not p.is_symlink())
+source=None;block_start=None
+for path in candidates:
+ text=path.read_text(encoding='utf-8',errors='ignore')
+ matches=[]
+ for match in re.finditer(r'(?m)^\s*server\s*\{',text):
+  depth=0;end=None
+  for index in range(match.end()-1,len(text)):
+   if text[index]=='{':depth+=1
+   elif text[index]=='}':
+    depth-=1
+    if depth==0:end=index+1;break
+  if end and re.search(r'(?m)^\s*server_name\s+[^;]*\b'+re.escape(host)+r'\b',text[match.start():end]):matches.append(match.end())
+ if len(matches)>1:raise SystemExit('Найдено несколько nginx server-блоков панели '+host)
+ if matches:source=path;block_start=matches[0];break
+if source is None:raise SystemExit('Не найден отдельный nginx vhost панели '+host+'; автоматическое ограничение небезопасно')
+text=source.read_text(encoding='utf-8');directive=marker+'\n    allow '+control+';\n    deny all;'
+if marker in text:
+ updated=re.sub(re.escape(marker)+r'\n\s*allow\s+[^;]+;\n\s*deny\s+all;',directive,text,count=1)
+else:
+ if block_start is None:raise SystemExit('Некорректный nginx vhost панели')
+ updated=text[:block_start]+'\n    '+directive+text[block_start:]
+backup=source.with_name(source.name+'.pre-home-vpn-panel-acl')
+if not backup.exists():shutil.copy2(source,backup);os.chmod(backup,0o600)
+fd,tmp=tempfile.mkstemp(prefix=source.name+'.',dir=source.parent,text=True)
+with os.fdopen(fd,'w',encoding='utf-8') as out:out.write(updated)
+os.chmod(tmp,0o644);os.replace(tmp,source)
+check=subprocess.run(['nginx','-t'],text=True,capture_output=True)
+if check.returncode:
+ source.write_text(text,encoding='utf-8');os.chmod(source,0o644)
+ raise SystemExit(check.stderr or check.stdout)
+subprocess.run(['systemctl','reload','nginx'],check=True)
+'''
+        ssh_command(node["ssh_host"],["python3","-c",code,host,control_ip])
+
+
 def configure_mode3_public_route(topology, inventories):
     if topology["mode"] != 3:return
     if topology.get("xui_install_mode","fresh")=="preserve":
@@ -1418,6 +1802,9 @@ def bot_enabled(topology):
 def bot_node(topology):
     placement=str((topology.get("telegram_bot") or {}).get("placement") or "control")
     if placement=="control":return None
+    if placement=="bot-vps":
+        bot=topology["telegram_bot"]
+        return {"id":"bot-vps","name":"Telegram VPS","ssh_host":bot["ssh_host"],"address":bot.get("address") or ssh_host_address(bot["ssh_host"])}
     return next((node for node in topology.get("nodes") or [] if node.get("id")==placement),None)
 
 
@@ -1445,9 +1832,16 @@ def credentials_wizard(topology):
 
 
 def apply(topology,bootstrap_ssh=False):
+    configure_ssh_ports(topology)
     check_servers(topology,bootstrap_ssh)
+    audit_servers(topology)
+    preflight_existing_xui_nodes(topology)
+    preflight_preserved_panel_acl(topology)
+    backups=create_prechange_backups(topology)
+    original_xui={node["id"]:xui_fingerprint(node) for node in topology["nodes"]} if topology.get("xui_install_mode")=="preserve" else {}
     credentials=credentials_wizard(topology)
     targets={topology["site"]["ssh_host"]}|{node["ssh_host"] for node in topology["nodes"]}
+    if bot_enabled(topology):targets.add(bot_target(topology))
     with tempfile.TemporaryDirectory(prefix="home-vpn-topology-") as temporary:
         archive=str(pathlib.Path(temporary)/"source.tar.gz");installer=str(pathlib.Path(temporary)/"3x-ui-protocol-installer.sh")
         build_source_archive(archive)
@@ -1457,9 +1851,9 @@ def apply(topology,bootstrap_ssh=False):
             for node in topology["nodes"]:install_xui_backup(node["ssh_host"])
         else:
             for node in topology["nodes"]:install_kit(node,installer)
-    preserved_token=existing_xui_token(topology["site"]["ssh_host"]) if topology.get("xui_install_mode","fresh")=="preserve" else ""
-    inventories={node["id"]:node_inventory(node,preserved_token) for node in topology["nodes"]}
-    if preserved_token:
+    preserved_tokens={node["id"]:existing_xui_token(node["ssh_host"]) for node in topology["nodes"]} if topology.get("xui_install_mode","fresh")=="preserve" else {}
+    inventories={node["id"]:node_inventory(node,preserved_tokens.get(node["id"],"")) for node in topology["nodes"]}
+    if preserved_tokens:
         for inventory in inventories.values():panel_api(inventory,"GET","/panel/api/inbounds/list")
     ensure_site_tls(topology)
     install_site(topology,inventories,credentials)
@@ -1469,8 +1863,12 @@ def apply(topology,bootstrap_ssh=False):
     if bot_enabled(topology):
         install_bot_egress(topology,inventories)
         bot_result=install_bot(topology,credentials)
+    restrict_preserved_panel_to_control(topology)
     install_placeholders(topology)
     configure_cascade(topology,inventories)
+    for node in topology["nodes"]:
+        if original_xui and xui_fingerprint(node)!=original_xui[node["id"]]:
+            raise RuntimeError(f"{node['id']}: существующие inbounds/клиенты изменились; используйте prechange backup для расследования")
     for node in topology["nodes"]:
         services="x-ui nginx home-vpn-kit-backup.timer"+(" kit-sub" if topology.get("xui_install_mode","fresh")!="preserve" else "")
         ssh_script(node["ssh_host"],"systemctl is-active --quiet "+services+"\n")
@@ -1479,19 +1877,33 @@ def apply(topology,bootstrap_ssh=False):
         ssh_script(bot_target(topology),"systemctl is-active --quiet vpn-bot vpn-bot-admin home-vpn-bot-egress\n")
     smoke_public_route(topology)
     print("Установка и проверка ролей завершены")
+    print("VPS-1 (сайт/API):",topology["site"]["address"],"· local")
+    for index,node in enumerate(topology["nodes"],2):
+        roles="3x-ui/VPN"+(" + Telegram-бот" if bot_enabled(topology) and node["ssh_host"]==bot_target(topology) else "")
+        print(f"VPS-{index} ({roles}):",node["ssh_host"],"·",node["address"])
     print("Сайт:",topology["site"]["public_url"])
+    secrets=site_secrets(topology["site"]["ssh_host"])
+    print("Админ-панель сайта:",topology["site"]["public_url"].rstrip("/")+secrets["admin_path"])
+    print("Логин сайта:",credentials["admin_user"])
+    print("Пароль сайта:",credentials["admin_password"])
     print("Telegram-бот:",bot_location_label(topology) if bot_enabled(topology) else "отключён")
     if bot_result:
         print("Панель Telegram-бота:",bot_result["public_url"])
         print("Логин панели Telegram-бота:",bot_result["user"])
         print("Пароль панели Telegram-бота:",bot_result["password"])
+    for role,item in backups.items():
+        print(f"Backup {role}: {item['archive']} · SHA-256 {item['sha256']}")
+    print("Домен заглушки/SNI:",topology["nodes"][0]["sni"])
+    print("3x-ui: существующие логин и пароль сохранены; API token повторно не выводится")
+    print("Диагностика: systemctl status vpn-shop home-vpn-bot-admin-tunnel; python3 /opt/home-vpn-source/scripts/smoke-home-vpn-topology.py --config /root/home-vpn-topology.json")
     print("Сохраните показанные реквизиты в менеджере паролей и очистите scrollback терминала.")
 
 
 def update_managed(topology):
     """Update project-owned files on every role without changing databases or secrets."""
-    check_servers(topology)
+    configure_ssh_ports(topology);check_servers(topology)
     targets={topology["site"]["ssh_host"]}|{node["ssh_host"] for node in topology["nodes"]}
+    if bot_enabled(topology):targets.add(bot_target(topology))
     with tempfile.TemporaryDirectory(prefix="home-vpn-topology-update-") as temporary:
         archive=str(pathlib.Path(temporary)/"source.tar.gz");build_source_archive(archive)
         for target in sorted(targets):deploy_source(target,archive)
@@ -1513,7 +1925,7 @@ def update_managed(topology):
 
 def remove_managed(topology,purge=False):
     """Remove only HOME-VPN-owned roles while preserving every 3x-ui node."""
-    check_servers(topology)
+    configure_ssh_ports(topology);check_servers(topology)
     central=topology["site"]["ssh_host"]
     for node in placeholder_nodes(topology):
         ssh_command(
@@ -1543,9 +1955,11 @@ def parse_arguments():
     parser.add_argument("--write-plan",type=pathlib.Path,help="сохранить выбранный не секретный план")
     parser.add_argument("--mode",type=int,choices=tuple(sorted(TOPOLOGY_MODES)),help="заранее выбранный режим архитектуры")
     parser.add_argument("--local-control-node",action="store_true",help="текущая VPS является управляющей нодой mode 1/2")
+    parser.add_argument("--distributed","--three-vps",dest="distributed",action="store_true",help="мастер VPS-1 site + произвольное число existing 3x-ui VPS; бот на выбранной ноде")
     parser.add_argument("--apply",action="store_true")
     parser.add_argument("--update-managed",action="store_true",help="обновить HOME-VPN на всех ролях без изменения данных")
     parser.add_argument("--remove-managed",action="store_true",help="удалить HOME-VPN со всех ролей, сохранив 3x-ui")
+    parser.add_argument("--audit-only",action="store_true",help="только read-only аудит всех ролей")
     parser.add_argument("--purge-data",action="store_true",help="при удалении также удалить данные HOME-VPN")
     parser.add_argument("--confirm",default="")
     parser.add_argument("--interactive-confirm",action="store_true",help="запросить контрольную фразу после показа плана")
@@ -1563,8 +1977,8 @@ def require_confirmation():
 
 def main():
     arguments=parse_arguments()
-    actions=sum(bool(value) for value in (arguments.apply,arguments.update_managed,arguments.remove_managed))
-    if actions>1:raise SystemExit("Выберите только одно действие: --apply, --update-managed или --remove-managed")
+    actions=sum(bool(value) for value in (arguments.apply,arguments.update_managed,arguments.remove_managed,arguments.audit_only))
+    if actions>1:raise SystemExit("Выберите только одно действие: --apply, --update-managed, --remove-managed или --audit-only")
     if (arguments.update_managed or arguments.remove_managed) and not arguments.config:
         raise SystemExit("Для update/remove требуется существующий проверенный --config plan")
     if arguments.purge_data and not arguments.remove_managed:
@@ -1573,23 +1987,35 @@ def main():
         raise SystemExit("--interactive-confirm допустим только вместе с --apply")
     if arguments.bootstrap_ssh and not arguments.apply:
         raise SystemExit("--bootstrap-ssh допустим только вместе с --apply")
-    if arguments.config and (arguments.mode is not None or arguments.local_control_node):
-        raise SystemExit("--mode и --local-control-node используются только с интерактивным мастером без --config")
-    topology=json.loads(arguments.config.read_text(encoding="utf-8")) if arguments.config else wizard(arguments.mode,arguments.local_control_node)
+    if arguments.config and (arguments.mode is not None or arguments.local_control_node or arguments.distributed):
+        raise SystemExit("--mode, --local-control-node и --distributed используются только с интерактивным мастером без --config")
+    if arguments.distributed and (arguments.mode is not None or arguments.local_control_node):
+        raise SystemExit("--distributed нельзя сочетать с --mode/--local-control-node")
+    topology=json.loads(arguments.config.read_text(encoding="utf-8")) if arguments.config else three_vps_wizard() if arguments.distributed else wizard(arguments.mode,arguments.local_control_node)
+    configure_ssh_ports(topology)
     validate_topology(topology);show_plan(topology)
-    if arguments.write_plan:
+    if arguments.write_plan and not arguments.apply:
         arguments.write_plan.write_text(json.dumps(topology,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
         arguments.write_plan.chmod(0o600)
         print("План сохранён без паролей и токенов:",arguments.write_plan)
     if arguments.update_managed:
         update_managed(topology);return
+    if arguments.audit_only:
+        check_servers(topology);audit_servers(topology);print("Read-only аудит всех VPS завершён");return
     if arguments.remove_managed:
         if arguments.confirm!=REMOVE_CONFIRMATION:raise SystemExit(f"Для удаления добавьте --confirm {REMOVE_CONFIRMATION!r}")
         remove_managed(topology,arguments.purge_data);return
-    if arguments.apply and arguments.interactive_confirm:require_confirmation()
+    if arguments.apply and arguments.interactive_confirm:
+        if arguments.distributed:
+            if not ask_yes_no("Применить показанный план к трём VPS?",False):raise SystemExit("Операция отменена")
+        else:require_confirmation()
     if not arguments.apply or (arguments.confirm!=CONFIRMATION and not arguments.interactive_confirm):
         raise SystemExit("Dry-run: для установки добавьте --apply --confirm 'INSTALL HOME VPN TOPOLOGY'")
     apply(topology,arguments.bootstrap_ssh)
+    if arguments.write_plan:
+        arguments.write_plan.write_text(json.dumps(topology,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+        arguments.write_plan.chmod(0o600)
+        print("План сохранён без паролей и токенов:",arguments.write_plan)
 
 
 if __name__=="__main__":main()
