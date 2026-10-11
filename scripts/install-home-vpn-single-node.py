@@ -724,6 +724,18 @@ def backup_path_allowed(path):
     )
 
 
+def backup_symlink_target_allowed(path):
+    if backup_path_allowed(path):return True
+    # Ubuntu/Debian enable packaged Nginx modules with links such as
+    # /etc/nginx/modules-enabled/70-mod-stream-geoip2.conf ->
+    # /usr/share/nginx/modules-available/mod-stream-geoip2.conf. The package
+    # target is not part of the backup, but the link is required to restore the
+    # active Nginx configuration.
+    prefix="usr/share/nginx/modules-available/"
+    relative=path.removeprefix(prefix)
+    return path.startswith(prefix) and bool(relative) and "/" not in relative
+
+
 def safe_backup_members(bundle):
     seen=set();symlinks=set();validated=[]
     for member in bundle.getmembers():
@@ -737,7 +749,7 @@ def safe_backup_members(bundle):
         if member.issym():
             if not member.linkname:raise ValueError("Пустая ссылка в backup: "+member.name)
             target=normalized_backup_path(member.linkname if member.linkname.startswith("/") else str(pathlib.PurePosixPath(path).parent/member.linkname))
-            if not backup_path_allowed(target):raise ValueError("Небезопасная ссылка в backup: "+member.name)
+            if not backup_symlink_target_allowed(target):raise ValueError("Небезопасная ссылка в backup: "+member.name)
             symlinks.add(path)
         elif not (member.isfile() or member.isdir()):
             raise ValueError("Специальный файл запрещён в backup: "+member.name)

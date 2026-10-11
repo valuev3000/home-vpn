@@ -179,6 +179,28 @@ class PlanTests(unittest.TestCase):
             with tarfile.open(archive,"r:gz") as bundle, self.assertRaisesRegex(ValueError,"символической ссылки"):
                 MODULE.safe_backup_members(bundle)
 
+    def test_backup_accepts_packaged_nginx_module_symlink(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive=pathlib.Path(directory)/"nginx-module-link.tar.gz"
+            with tarfile.open(archive,"w:gz") as bundle:
+                link=tarfile.TarInfo("./etc/nginx/modules-enabled/70-mod-stream-geoip2.conf")
+                link.type=tarfile.SYMTYPE
+                link.linkname="/usr/share/nginx/modules-available/mod-stream-geoip2.conf"
+                bundle.addfile(link)
+            with tarfile.open(archive,"r:gz") as bundle:
+                members=MODULE.safe_backup_members(bundle)
+            self.assertEqual(1,len(members))
+
+    def test_backup_rejects_other_external_symlink_targets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive=pathlib.Path(directory)/"unsafe-external-link.tar.gz"
+            with tarfile.open(archive,"w:gz") as bundle:
+                link=tarfile.TarInfo("./etc/nginx/modules-enabled/evil.conf")
+                link.type=tarfile.SYMTYPE;link.linkname="/etc/shadow"
+                bundle.addfile(link)
+            with tarfile.open(archive,"r:gz") as bundle, self.assertRaisesRegex(ValueError,"Небезопасная ссылка"):
+                MODULE.safe_backup_members(bundle)
+
     def test_full_backup_verifies_checksum_manifest_and_sqlite(self):
         with tempfile.TemporaryDirectory() as directory:
             root=pathlib.Path(directory);source=root/"source";(source/"var/lib/vpn-shop").mkdir(parents=True)
