@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Install one of the supported HOME-VPN topologies on remote VPS servers.
+"""Install one of the supported HOME-VPN topologies on one or more VPS servers.
 
-The script runs from an administrator workstation with root SSH access. It
-never writes secrets to the repository: short-lived answer files on target VPS
-with mode 0600 and removed immediately after installation.
+The script runs either from an administrator workstation with root SSH access
+to every VPS, or directly on the central control VPS with remote access only to
+foreign nodes. It never writes secrets to the repository: short-lived answer
+files on target VPS use mode 0600 and are removed immediately after installation.
 """
 
 import argparse
@@ -32,6 +33,8 @@ KIT_BASE_REMARKS = {
     "VMess-WS", "Shadowsocks", "TUIC", "AmneziaWG", "AmneziaWG-3.1",
 }
 CONFIRMATION = "INSTALL HOME VPN TOPOLOGY"
+DEFAULT_KIT_URL = "https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/v1.2/scripts/3x-ui.sh"
+DEFAULT_KIT_SHA256 = "2d7a0f0dcc26ea4f8bab3d60e1900e7046a9673a88fef85c03630502120961f0"
 
 
 def run(arguments, *, input_text=None, capture=False, timeout=None):
@@ -244,16 +247,28 @@ def node_wizard(index, mode, central_address=None, existing_nodes=None, forbidde
     }
 
 
-def wizard():
+def print_architecture_table():
     print("Выберите архитектуру:")
-    print(" 1 — центральная VPS (желательно RU): сайт; зарубежные VPS: 11 подключений")
-    print(" 2 — то же, но каскад: центральная VPS → зарубежная VPS")
-    print(" 3 — один зарубежный сервер: сайт, бот и 11 подключений")
-    mode = ask_int("Режим",1,1,3)
-    installer_url = ask_validated("HTTPS URL проверенного установщика 11 подключений","",valid_installer_url)
-    installer_sha256 = ask_validated("SHA-256 установщика","",valid_sha256)
+    print(" 1 — управляющая роль: центральная VPS (сайт, панели, бот, egress)")
+    print("     VPN: клиент → иностранная VPS; заглушка: только иностранные ноды")
+    print(" 2 — управляющая роль: центральная VPS + cascade")
+    print("     VPN: клиент → центральная VPS → иностранная VPS; заглушка: только иностранные ноды")
+    print(" 3 — управляющая роль: единственная иностранная VPS выполняет все роли")
+    print("     VPN: клиент → единственная VPS; заглушка: запрещена")
+
+
+def wizard(forced_mode=None, local_control_node=False):
+    print_architecture_table()
+    mode = int(forced_mode) if forced_mode is not None else ask_int("Режим",1,1,3)
+    if mode not in TOPOLOGY_MODES:raise SystemExit("Режим должен быть 1, 2 или 3")
+    installer_url = ask_validated("HTTPS URL проверенного установщика 11 подключений",DEFAULT_KIT_URL,valid_installer_url)
+    installer_sha256 = ask_validated("SHA-256 установщика",DEFAULT_KIT_SHA256,valid_sha256)
     if mode in (1, 2):
-        site_ssh = ask_validated("Root SSH центральной VPS","root@central.example.com",lambda value:valid_ssh_target(value,"SSH центральной VPS"))
+        if local_control_node:
+            site_ssh = "local"
+            print("Управляющая VPS: текущий сервер (SSH к самому себе не требуется)")
+        else:
+            site_ssh = ask_validated("Root SSH центральной VPS","root@central.example.com",lambda value:valid_ssh_target(value,"SSH центральной VPS"))
         site_address = ask_validated("Адрес центральной VPS в служебной сети","10.10.0.10",lambda value:valid_ip(value,"Адрес центральной VPS"))
         count = ask_int("Количество зарубежных нод", 1)
         nodes = []
@@ -1302,20 +1317,34 @@ def parse_arguments():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config",type=pathlib.Path,help="не содержащий секретов JSON-план")
     parser.add_argument("--write-plan",type=pathlib.Path,help="сохранить выбранный не секретный план")
+    parser.add_argument("--mode",type=int,choices=tuple(sorted(TOPOLOGY_MODES)),help="заранее выбранный режим архитектуры")
+    parser.add_argument("--local-control-node",action="store_true",help="текущая VPS является управляющей нодой mode 1/2")
     parser.add_argument("--apply",action="store_true")
     parser.add_argument("--confirm",default="")
+    parser.add_argument("--interactive-confirm",action="store_true",help="запросить контрольную фразу после показа плана")
     return parser.parse_args()
+
+
+def require_confirmation():
+    while True:
+        value=input(f"Введите {CONFIRMATION!r} для применения или 0 для отмены: ").strip()
+        if value==CONFIRMATION:return
+        if value=="0":raise SystemExit("Операция отменена")
+        print(f"Ответ не совпадает. Введите точно {CONFIRMATION!r} или 0 для отмены.")
 
 
 def main():
     arguments=parse_arguments()
-    topology=json.loads(arguments.config.read_text(encoding="utf-8")) if arguments.config else wizard()
+    if arguments.config and (arguments.mode is not None or arguments.local_control_node):
+        raise SystemExit("--mode и --local-control-node используются только с интерактивным мастером без --config")
+    topology=json.loads(arguments.config.read_text(encoding="utf-8")) if arguments.config else wizard(arguments.mode,arguments.local_control_node)
     validate_topology(topology);show_plan(topology)
     if arguments.write_plan:
         arguments.write_plan.write_text(json.dumps(topology,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
         arguments.write_plan.chmod(0o600)
         print("План сохранён без паролей и токенов:",arguments.write_plan)
-    if not arguments.apply or arguments.confirm!=CONFIRMATION:
+    if arguments.apply and arguments.interactive_confirm:require_confirmation()
+    if not arguments.apply or (arguments.confirm!=CONFIRMATION and not arguments.interactive_confirm):
         raise SystemExit("Dry-run: для установки добавьте --apply --confirm 'INSTALL HOME VPN TOPOLOGY'")
     apply(topology)
 

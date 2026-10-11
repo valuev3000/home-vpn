@@ -722,6 +722,44 @@ def choose_action():
         print("Допустимы варианты 0, 1, 2, 3, 4 или 5")
 
 
+def saved_topology_mode(plan_path=DEFAULT_PLAN):
+    try:
+        mode=int(json.loads(pathlib.Path(plan_path).read_text(encoding="utf-8")).get("mode",0))
+    except (OSError,ValueError,TypeError,json.JSONDecodeError):return None
+    return mode if mode in (1,2,3) else None
+
+
+def choose_topology_mode(plan_path=DEFAULT_PLAN):
+    default=str(saved_topology_mode(plan_path) or 3)
+    print("\nАрхитектура HOME-VPN:")
+    print("  1 — центральная VPS: сайт, панели, бот, egress")
+    print("      VPN: клиент → иностранная VPS; заглушка: только иностранные ноды")
+    print("  2 — центральная VPS + cascade")
+    print("      VPN: клиент → центральная VPS → иностранная VPS; заглушка: только иностранные ноды")
+    print("  3 — единственная иностранная VPS выполняет все роли")
+    print("      VPN: клиент → единственная VPS; заглушка: запрещена")
+    while True:
+        choice=ask("Режим",default)
+        if choice in ("1","2","3"):return int(choice)
+        print("Допустимы варианты 1, 2 или 3")
+
+
+def run_multinode_installer(mode,plan_path,plan_only=False):
+    if mode not in (1,2):raise ValueError("Многонодовый мастер поддерживает mode 1 или 2")
+    if existing_xui_detected() and not saved_topology_mode(plan_path):
+        raise SystemExit(
+            "На управляющей VPS обнаружена 3x-ui. Для mode 1/2 используйте отдельную "
+            "центральную VPS без VPN-роли либо выберите mode 3."
+        )
+    command=[sys.executable,TOPOLOGY_INSTALLER,"--mode",str(mode),"--local-control-node","--write-plan",plan_path]
+    if not plan_only:command.extend(("--apply","--interactive-confirm"))
+    result=run(command,check=False)
+    expected_dry_run=plan_only and result.returncode==1 and pathlib.Path(plan_path).is_file()
+    if (plan_only and not expected_dry_run) or (not plan_only and result.returncode):
+        raise SystemExit(result.returncode)
+    if plan_only:print(f"План сохранён: {plan_path}\nVPS не изменялись.")
+
+
 BACKUP_ALLOWED_ROOTS = (
     "etc/x-ui", "etc/nginx", "etc/letsencrypt", "etc/kit", "usr/local/x-ui",
     "etc/home-vpn", "etc/home-vpn-mail", "etc/vpn-shop.env", "etc/vpn-bot.env",
@@ -1076,6 +1114,17 @@ def main():
     if action == "backup":create_full_backup();return
     if action == "restore":restore_full_backup(arguments.plan);return
     if action == "remove":remove_home_vpn();return
+
+    topology_mode=choose_topology_mode(arguments.plan)
+    current_mode=saved_topology_mode(arguments.plan)
+    if home_vpn_installed() and current_mode and topology_mode!=current_mode:
+        raise SystemExit(
+            f"Установлен mode {current_mode}. Автоматический переход в mode {topology_mode} "
+            "заблокирован: сначала создайте backup и подготовьте отдельный план миграции."
+        )
+    if topology_mode in (1,2):
+        run_multinode_installer(topology_mode,arguments.plan,arguments.plan_only)
+        return
 
     answers = collect_answers(arguments.site_domain, arguments.panel_domain)
     check_dns(answers["site_domain"], answers["public_ip"])

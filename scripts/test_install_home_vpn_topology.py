@@ -3,6 +3,7 @@ import pathlib
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 
 SCRIPT = pathlib.Path(__file__).with_name("install-home-vpn-topology.py")
@@ -36,6 +37,26 @@ def topology(mode=1, nodes=1):
 
 
 class TopologyValidationTests(unittest.TestCase):
+    def test_interactive_confirmation_repeats_until_exact_phrase(self):
+        answers=iter(("wrong",MODULE.CONFIRMATION));original=getattr(MODULE,"input",None)
+        MODULE.input=lambda _prompt:next(answers)
+        try:self.assertIsNone(MODULE.require_confirmation())
+        finally:
+            if original is None:delattr(MODULE,"input")
+            else:MODULE.input=original
+
+    def test_local_control_node_wizard_keeps_foreign_nodes_remote(self):
+        answers=iter((
+            MODULE.DEFAULT_KIT_URL,MODULE.DEFAULT_KIT_SHA256,
+            "10.10.0.10","1","DE","foreign-1","Estonia","root@foreign.example.test",
+            "10.10.0.11","vpn.example.test","dl.google.com","","1","https://site.example.test","","n",
+        ))
+        with mock.patch.object(MODULE,"ask",side_effect=lambda *_args,**_kwargs:next(answers)):
+            plan=MODULE.wizard(1,local_control_node=True)
+        self.assertEqual("local",plan["site"]["ssh_host"])
+        self.assertEqual("root@foreign.example.test",plan["nodes"][0]["ssh_host"])
+        self.assertEqual(1,plan["mode"])
+
     def test_integer_question_repeats_until_value_is_in_range(self):
         answers=iter(("4","2"));original=MODULE.ask
         MODULE.ask=lambda _prompt,_default,_secret=False:next(answers)

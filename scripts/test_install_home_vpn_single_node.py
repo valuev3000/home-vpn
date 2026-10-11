@@ -5,6 +5,7 @@ import sqlite3
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 
 SCRIPT = pathlib.Path(__file__).with_name("install-home-vpn-single-node.py")
@@ -14,6 +15,25 @@ SPEC.loader.exec_module(MODULE)
 
 
 class ValidationTests(unittest.TestCase):
+    def test_topology_question_repeats_and_defaults_to_saved_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plan=pathlib.Path(directory)/"plan.json"
+            plan.write_text('{"mode":2}',encoding="utf-8")
+            answers=iter(("9","2"));original=MODULE.ask
+            MODULE.ask=lambda *_args,**_kwargs:next(answers)
+            try:self.assertEqual(2,MODULE.choose_topology_mode(plan))
+            finally:MODULE.ask=original
+
+    def test_multinode_launcher_uses_current_vps_as_control_node(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plan=pathlib.Path(directory)/"plan.json"
+            completed=__import__('subprocess').CompletedProcess([],0)
+            with mock.patch.object(MODULE,"existing_xui_detected",return_value=False), mock.patch.object(MODULE,"run",return_value=completed) as runner:
+                MODULE.run_multinode_installer(2,plan,False)
+        command=runner.call_args.args[0]
+        self.assertIn("--local-control-node",command);self.assertEqual("2",command[command.index("--mode")+1])
+        self.assertIn("--interactive-confirm",command)
+
     def test_lets_encrypt_does_not_request_email(self):
         source = SCRIPT.read_text(encoding="utf-8")
         self.assertNotIn('ask("Email для Let\'s Encrypt")', source)

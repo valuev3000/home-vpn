@@ -36,6 +36,16 @@ loopback HOME-VPN API.
 
 ## Чистая установка
 
+Интерактивная установка всех трёх режимов непосредственно с управляющей VPS:
+
+```bash
+curl -fsSLo /tmp/home-vpn-install.sh https://raw.githubusercontent.com/valuev3000/home-vpn/main/install-single-node.sh && sudo bash /tmp/home-vpn-install.sh
+```
+
+В modes 1/2 текущая VPS записывается в план как `local`, а SSH запрашивается
+только для иностранных нод. В mode 3 сайт и VPN-нода используют одну локальную
+цель. Неверный номер режима запрашивается повторно.
+
 Создайте локальный план без секретов:
 
 ```bash
