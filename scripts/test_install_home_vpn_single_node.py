@@ -2,6 +2,7 @@ import importlib.util
 import json
 import pathlib
 import sqlite3
+import tarfile
 import tempfile
 import unittest
 
@@ -115,14 +116,56 @@ class ValidationTests(unittest.TestCase):
 
 
 class PlanTests(unittest.TestCase):
-    def test_lifecycle_menu_supports_install_update_and_remove(self):
+    def test_lifecycle_menu_supports_install_update_backup_restore_and_remove(self):
         source = SCRIPT.read_text(encoding="utf-8")
         self.assertIn('"1": "install"', source)
         self.assertIn('"2": "update"', source)
-        self.assertIn('"3": "remove"', source)
+        self.assertIn('"3": "backup"', source)
+        self.assertIn('"4": "restore"', source)
+        self.assertIn('"5": "remove"', source)
+        self.assertIn("RESTORE HOME VPN", source)
         self.assertIn("DELETE HOME-VPN", source)
         self.assertIn("3x-ui, её inbounds и пользовательские клиенты удаляться не будут", source)
         self.assertIn('"ls-files", "-z"', source)
+
+    def test_installation_detection_accepts_partial_installation(self):
+        original = MODULE.installation_markers
+        MODULE.installation_markers = lambda:["служба сайта"]
+        try:self.assertTrue(MODULE.home_vpn_installed())
+        finally:MODULE.installation_markers = original
+
+    def test_backup_rejects_unsafe_member_paths(self):
+        import io
+        with tempfile.TemporaryDirectory() as directory:
+            archive=pathlib.Path(directory)/"unsafe.tar.gz"
+            with tarfile.open(archive,"w:gz") as bundle:
+                member=tarfile.TarInfo("../../etc/shadow");payload=b"bad";member.size=len(payload)
+                bundle.addfile(member,io.BytesIO(payload))
+            with tarfile.open(archive,"r:gz") as bundle, self.assertRaises(ValueError):
+                list(MODULE.safe_backup_members(bundle))
+
+    def test_backup_rejects_files_below_symlink(self):
+        import io
+        with tempfile.TemporaryDirectory() as directory:
+            archive=pathlib.Path(directory)/"unsafe-link.tar.gz"
+            with tarfile.open(archive,"w:gz") as bundle:
+                link=tarfile.TarInfo("etc/nginx/escape");link.type=tarfile.SYMTYPE;link.linkname="/etc/nginx"
+                bundle.addfile(link)
+                member=tarfile.TarInfo("etc/nginx/escape/changed.conf");payload=b"bad";member.size=len(payload)
+                bundle.addfile(member,io.BytesIO(payload))
+            with tarfile.open(archive,"r:gz") as bundle, self.assertRaisesRegex(ValueError,"символической ссылки"):
+                MODULE.safe_backup_members(bundle)
+
+    def test_full_backup_verifies_checksum_manifest_and_sqlite(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=pathlib.Path(directory);source=root/"source";(source/"var/lib/vpn-shop").mkdir(parents=True)
+            database=source/"var/lib/vpn-shop/shop.db";connection=sqlite3.connect(database);connection.execute("CREATE TABLE test(value)");connection.commit();connection.close()
+            (source/"manifest.json").write_text(json.dumps({"format":1,"type":"home-vpn-full"}),encoding="utf-8")
+            archive=root/"home-vpn-full-test.tar.gz"
+            with tarfile.open(archive,"w:gz") as bundle:
+                bundle.add(source/"manifest.json",arcname="manifest.json");bundle.add(source/"var",arcname="var")
+            digest=MODULE.file_sha256(archive);archive.with_name(archive.name+".sha256").write_text(f"{digest}  {archive.name}\n",encoding="ascii")
+            MODULE.verify_full_backup(archive)
 
     def test_reads_only_explicit_env_assignments(self):
         with tempfile.TemporaryDirectory() as directory:

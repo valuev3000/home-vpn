@@ -2,6 +2,7 @@
 """Interactive end-to-end installer run directly on a fresh HOME-VPN VPS."""
 
 import argparse
+import hashlib
 import ipaddress
 import json
 import os
@@ -9,9 +10,12 @@ import pathlib
 import re
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
+import tarfile
 import tempfile
+import time
 import urllib.parse
 
 
@@ -22,6 +26,12 @@ DEFAULT_PLAN = pathlib.Path("/root/home-vpn-topology.json")
 DEFAULT_KIT_URL = "https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/v1.2/scripts/3x-ui.sh"
 DEFAULT_KIT_SHA256 = "2d7a0f0dcc26ea4f8bab3d60e1900e7046a9673a88fef85c03630502120961f0"
 APPLY_CONFIRMATION = "INSTALL HOME VPN"
+BACKUP_DIR = pathlib.Path("/var/backups/home-vpn")
+BACKUP_GLOB = "home-vpn-full-*.tar.gz"
+MANAGED_SERVICES = (
+    "x-ui", "kit-sub", "nginx", "vpn-shop", "vpn-bot", "vpn-bot-admin",
+    "home-vpn-bot-egress",
+)
 
 
 PREPARE_SERVER = r'''set -Eeuo pipefail
@@ -103,33 +113,70 @@ test -s "$cert_dir/privkey.pem"
 PREINSTALL_BACKUP = r'''set -Eeuo pipefail
 umask 077
 install -d -m 0700 /var/backups/home-vpn
-stage=$(mktemp -d /var/backups/home-vpn/.preinstall.XXXXXX)
+stage=$(mktemp -d /var/backups/home-vpn/.full-backup.XXXXXX)
 trap 'rm -rf -- "$stage"' EXIT
-tar -C / --exclude=etc/x-ui/x-ui.db --exclude=etc/x-ui/x-ui.db-wal --exclude=etc/x-ui/x-ui.db-shm \
-    -cf - etc/x-ui etc/nginx etc/letsencrypt usr/local/x-ui 2>/dev/null | tar -C "$stage" -xf -
-for item in etc/home-vpn etc/vpn-shop.env etc/vpn-bot.env etc/vpn-bot-admin.env var/lib/vpn-shop var/lib/vpn-bot; do
+for item in etc/x-ui etc/nginx etc/letsencrypt etc/kit usr/local/x-ui \
+    etc/home-vpn etc/vpn-shop.env etc/vpn-bot.env etc/vpn-bot-admin.env \
+    etc/vpn-bot-menu.json etc/home-vpn-mail etc/sudoers.d/vpn-bot-admin \
+    etc/cron.d/x-ui etc/cron.d/3x-ui-pro \
+    etc/ufw/user.rules etc/ufw/user6.rules etc/default/ufw \
+    var/lib/vpn-shop var/lib/vpn-bot srv/home-vpn \
+    root/home-vpn-topology.json root/home-vpn-mail-credentials.txt; do
+    case "$item" in etc/x-ui|var/lib/vpn-shop) continue ;; esac
     [ ! -e "/$item" ] || tar -C / -cf - "$item" | tar -C "$stage" -xf -
 done
-mkdir -p "$stage/etc/x-ui"
-python3 - "$stage/etc/x-ui/x-ui.db" <<'PY'
+if [ -d /etc/x-ui ]; then
+    tar -C / --exclude=etc/x-ui/x-ui.db --exclude=etc/x-ui/x-ui.db-wal --exclude=etc/x-ui/x-ui.db-shm \
+        -cf - etc/x-ui | tar -C "$stage" -xf -
+fi
+if [ -d /var/lib/vpn-shop ]; then
+    tar -C / --exclude=var/lib/vpn-shop/shop.db --exclude=var/lib/vpn-shop/shop.db-wal --exclude=var/lib/vpn-shop/shop.db-shm \
+        -cf - var/lib/vpn-shop | tar -C "$stage" -xf -
+fi
+if [ -s /var/lib/vpn-shop/shop.db ]; then
+  mkdir -p "$stage/var/lib/vpn-shop"
+  python3 - "$stage/var/lib/vpn-shop/shop.db" <<'PY'
+import sqlite3,sys
+source=sqlite3.connect('file:/var/lib/vpn-shop/shop.db?mode=ro',uri=True)
+target=sqlite3.connect(sys.argv[1]);source.backup(target);target.close();source.close()
+check=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)
+result=check.execute('PRAGMA integrity_check').fetchone()[0];check.close()
+if result!='ok':raise SystemExit('vpn-shop SQLite integrity_check: '+str(result))
+PY
+fi
+for item in /etc/systemd/system/x-ui.service /etc/systemd/system/kit-sub.service \
+    /etc/systemd/system/vpn-shop.service \
+    /etc/systemd/system/vpn-bot.service /etc/systemd/system/vpn-bot-admin.service \
+    /etc/systemd/system/home-vpn-*.service /etc/systemd/system/home-vpn-*.timer; do
+    [ ! -e "$item" ] || tar -C / -cf - "${item#/}" | tar -C "$stage" -xf -
+done
+if [ -s /etc/x-ui/x-ui.db ]; then
+  mkdir -p "$stage/etc/x-ui"
+  python3 - "$stage/etc/x-ui/x-ui.db" <<'PY'
 import pathlib,sqlite3,sys
 path=pathlib.Path('/etc/x-ui/x-ui.db')
-if not path.is_file():raise SystemExit('/etc/x-ui/x-ui.db не найдена')
 source=sqlite3.connect('file:'+str(path)+'?mode=ro',uri=True)
 target=sqlite3.connect(sys.argv[1]);source.backup(target);target.close();source.close()
 check=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)
 result=check.execute('PRAGMA integrity_check').fetchone()[0];check.close()
 if result!='ok':raise SystemExit('3x-ui SQLite integrity_check: '+str(result))
 PY
+fi
+python3 - "$stage/manifest.json" <<'PY'
+import json,pathlib,sys,time
+root=pathlib.Path(sys.argv[1]).parent
+paths=sorted(str(path.relative_to(root)) for path in root.rglob('*') if path.name!='manifest.json')
+pathlib.Path(sys.argv[1]).write_text(json.dumps({'format':1,'type':'home-vpn-full','created_at':int(time.time()),'paths':paths},ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+PY
 stamp=$(date -u +%Y%m%d-%H%M%S)
-archive="/var/backups/home-vpn/preinstall-${stamp}.tar.gz"
+archive="/var/backups/home-vpn/home-vpn-full-${stamp}.tar.gz"
 tar -czf "$archive" -C "$stage" .
 chmod 0600 "$archive"
 tar -tzf "$archive" >/dev/null
-sha256sum "$archive" > "${archive}.sha256"
+(cd "$(dirname "$archive")" && sha256sum "$(basename "$archive")" > "$(basename "$archive").sha256")
 chmod 0600 "${archive}.sha256"
-sha256sum -c "${archive}.sha256" >/dev/null
-printf 'Проверенный архив перед установкой: %s\n' "$archive"
+(cd "$(dirname "$archive")" && sha256sum -c "$(basename "$archive").sha256" >/dev/null)
+printf 'Проверенный полный архив: %s\n' "$archive"
 '''
 
 
@@ -554,22 +601,140 @@ def show_results(plan_path=DEFAULT_PLAN):
     print("Сохраните эти данные в менеджере паролей и очистите scrollback терминала.")
 
 
+def installation_markers():
+    markers = {
+        "конфигурация": pathlib.Path("/etc/home-vpn/config.json"),
+        "сайт": pathlib.Path("/etc/vpn-shop.env"),
+        "Telegram-бот": pathlib.Path("/etc/vpn-bot.env"),
+        "исходный код": pathlib.Path("/opt/home-vpn-source"),
+        "служба сайта": pathlib.Path("/etc/systemd/system/vpn-shop.service"),
+    }
+    return [label for label, path in markers.items() if path.exists()]
+
+
 def home_vpn_installed():
-    return pathlib.Path("/etc/vpn-shop.env").is_file() or pathlib.Path("/etc/home-vpn/config.json").is_file()
+    return bool(installation_markers())
 
 
 def choose_action():
-    state = "HOME-VPN обнаружен" if home_vpn_installed() else "HOME-VPN не установлен"
+    installed = home_vpn_installed()
+    details = ", ".join(installation_markers())
+    state = f"HOME-VPN обнаружен ({details})" if installed else "HOME-VPN не установлен"
     print(f"\n{state}. Выберите действие:")
     print("  1 — установить или повторно настроить")
     print("  2 — обновить HOME-VPN, сохранив настройки и пользователей")
-    print("  3 — удалить HOME-VPN, сохранив 3x-ui и её клиентов")
+    print("  3 — создать полный backup сайта, 3x-ui и Telegram-бота")
+    print("  4 — восстановить настройки сайта, 3x-ui и Telegram-бота из backup")
+    print("  5 — удалить HOME-VPN, сохранив 3x-ui и её клиентов")
     print("  0 — выйти без изменений")
-    choice = ask("Действие", "2" if home_vpn_installed() else "1")
-    actions = {"1": "install", "2": "update", "3": "remove", "0": "exit"}
-    if choice not in actions:
-        raise SystemExit("Допустимы варианты 0, 1, 2 или 3")
-    return actions[choice]
+    actions = {"1": "install", "2": "update", "3": "backup", "4": "restore", "5": "remove", "0": "exit"}
+    while True:
+        choice = ask("Действие", "2" if installed else "1")
+        if choice in actions:return actions[choice]
+        print("Допустимы варианты 0, 1, 2, 3, 4 или 5")
+
+
+BACKUP_ALLOWED_ROOTS = (
+    "etc/x-ui", "etc/nginx", "etc/letsencrypt", "etc/kit", "usr/local/x-ui",
+    "etc/home-vpn", "etc/home-vpn-mail", "etc/vpn-shop.env", "etc/vpn-bot.env",
+    "etc/vpn-bot-admin.env", "etc/vpn-bot-menu.json",
+    "etc/sudoers.d/vpn-bot-admin", "etc/ufw/user.rules",
+    "etc/ufw/user6.rules", "etc/default/ufw", "etc/cron.d/x-ui",
+    "etc/cron.d/3x-ui-pro", "etc/systemd/system/x-ui.service",
+    "etc/systemd/system/kit-sub.service",
+    "etc/systemd/system/vpn-shop.service", "etc/systemd/system/vpn-bot.service",
+    "etc/systemd/system/vpn-bot-admin.service", "etc/systemd/system/home-vpn-",
+    "var/lib/vpn-shop", "var/lib/vpn-bot", "srv/home-vpn",
+    "root/home-vpn-topology.json", "root/home-vpn-mail-credentials.txt",
+)
+
+
+def normalized_backup_path(value):
+    parts=[]
+    for part in pathlib.PurePosixPath(str(value).lstrip("/")).parts:
+        if part in ("", "."):continue
+        if part=="..":
+            if not parts:raise ValueError("Путь выходит за пределы архива")
+            parts.pop()
+        else:parts.append(part)
+    return "/".join(parts)
+
+
+def backup_path_allowed(path):
+    if path in (
+        "", "manifest.json", "etc", "etc/systemd", "etc/systemd/system",
+        "etc/sudoers.d", "etc/ufw", "etc/default", "etc/cron.d",
+        "usr", "usr/local", "var", "var/lib", "srv", "root",
+    ):
+        return True
+    return any(
+        path==root or path.startswith(root + "/")
+        or (root.endswith("home-vpn-") and path.startswith(root))
+        for root in BACKUP_ALLOWED_ROOTS
+    )
+
+
+def safe_backup_members(bundle):
+    seen=set();symlinks=set();validated=[]
+    for member in bundle.getmembers():
+        if pathlib.PurePosixPath(member.name).is_absolute():
+            raise ValueError("Абсолютный путь запрещён в backup: "+member.name)
+        path=normalized_backup_path(member.name)
+        if not backup_path_allowed(path):raise ValueError("Недопустимый путь в backup: "+member.name)
+        if path in seen:raise ValueError("Повторяющийся путь в backup: "+member.name)
+        seen.add(path)
+        if member.islnk():raise ValueError("Hardlink запрещён в backup: "+member.name)
+        if member.issym():
+            if not member.linkname:raise ValueError("Пустая ссылка в backup: "+member.name)
+            target=normalized_backup_path(member.linkname if member.linkname.startswith("/") else str(pathlib.PurePosixPath(path).parent/member.linkname))
+            if not backup_path_allowed(target):raise ValueError("Небезопасная ссылка в backup: "+member.name)
+            symlinks.add(path)
+        elif not (member.isfile() or member.isdir()):
+            raise ValueError("Специальный файл запрещён в backup: "+member.name)
+        validated.append((path,member))
+    for path,_member in validated:
+        if any(path.startswith(link+"/") for link in symlinks):
+            raise ValueError("Путь внутри символической ссылки запрещён в backup: "+path)
+    return [member for _path,member in validated]
+
+
+def restorable_backup_members(bundle):
+    return [member for member in safe_backup_members(bundle) if normalized_backup_path(member.name) not in ("","manifest.json")]
+
+
+def file_sha256(path):
+    digest=hashlib.sha256()
+    with pathlib.Path(path).open("rb") as stream:
+        for block in iter(lambda:stream.read(1024*1024),b""):digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_full_backup(archive, destination=None):
+    archive=pathlib.Path(archive).resolve();checksum=archive.with_name(archive.name+".sha256")
+    if not archive.is_file():raise ValueError(f"Архив не найден: {archive}")
+    if not checksum.is_file():raise ValueError(f"Нет файла SHA-256: {checksum}")
+    fields=checksum.read_text(encoding="ascii").split()
+    if not fields:raise ValueError("Файл SHA-256 пуст")
+    expected=fields[0].lower()
+    if not re.fullmatch(r"[0-9a-f]{64}",expected) or file_sha256(archive)!=expected:
+        raise ValueError("SHA-256 архива не совпадает")
+    temporary=destination is None
+    root=pathlib.Path(destination) if destination else pathlib.Path(tempfile.mkdtemp(prefix="home-vpn-full-verify-"))
+    try:
+        root.mkdir(parents=True,exist_ok=True)
+        with tarfile.open(archive,"r:gz") as bundle:
+            members=safe_backup_members(bundle);bundle.extractall(root,members=members)
+        manifest=json.loads((root/"manifest.json").read_text(encoding="utf-8"))
+        if manifest.get("format")!=1 or manifest.get("type")!="home-vpn-full":
+            raise ValueError("Неподдерживаемый формат полного backup")
+        for database in list(root.rglob("*.db"))+list(root.rglob("*.sqlite"))+list(root.rglob("*.sqlite3")):
+            connection=sqlite3.connect("file:"+str(database)+"?mode=ro",uri=True)
+            try:result=connection.execute("PRAGMA integrity_check").fetchone()[0]
+            finally:connection.close()
+            if result!="ok":raise ValueError(f"SQLite повреждена: {database}: {result}")
+        return root
+    finally:
+        if temporary:shutil.rmtree(root,ignore_errors=True)
 
 
 def deploy_current_source():
@@ -621,18 +786,94 @@ def installed_managed_components():
     return components
 
 
-def backup_before_lifecycle_change():
-    if not existing_xui_detected():return
-    candidates = ("vpn-shop", "vpn-bot", "vpn-bot-admin", "home-vpn-bot-egress")
-    active = [
-        service for service in candidates
+def active_managed_services():
+    return [
+        service for service in MANAGED_SERVICES
         if run(["systemctl", "is-active", "--quiet", service], check=False).returncode == 0
     ]
+
+
+def create_full_backup(require_installation=True):
+    if require_installation and not (home_vpn_installed() or existing_xui_detected()):
+        raise SystemExit("HOME-VPN и 3x-ui не обнаружены: сохранять нечего")
+    BACKUP_DIR.mkdir(parents=True,exist_ok=True);BACKUP_DIR.chmod(0o700)
+    before=set(BACKUP_DIR.glob(BACKUP_GLOB));active=active_managed_services()
     try:
-        if active:run(["systemctl", "stop", *active], timeout=120)
+        if active:run(["systemctl", "stop", *active], timeout=180)
         run(["bash", "-s"], input_text=PREINSTALL_BACKUP, timeout=1800)
     finally:
-        if active:run(["systemctl", "start", *active], timeout=120, check=False)
+        if active:run(["systemctl", "start", *active], timeout=180, check=False)
+    created=sorted(set(BACKUP_DIR.glob(BACKUP_GLOB))-before,key=lambda path:path.stat().st_mtime)
+    if not created:raise RuntimeError("Сценарий backup не создал новый архив")
+    archive=created[-1];verify_full_backup(archive)
+    print(f"Полный проверенный backup: {archive}")
+    print(f"SHA-256: {archive}.sha256")
+    return archive
+
+
+def backup_before_lifecycle_change():
+    if not (home_vpn_installed() or existing_xui_detected()):return None
+    return create_full_backup(require_installation=False)
+
+
+def choose_backup_archive():
+    archives=sorted(BACKUP_DIR.glob(BACKUP_GLOB),key=lambda path:path.stat().st_mtime,reverse=True)
+    if archives:
+        print("\nДоступные полные backup:")
+        for index,path in enumerate(archives,1):
+            stamp=time.strftime("%d.%m.%Y %H:%M",time.localtime(path.stat().st_mtime))
+            print(f"  {index} — {path} ({stamp}, {path.stat().st_size//1024//1024} MiB)")
+    while True:
+        value=ask("Номер backup или абсолютный путь", "1" if archives else "")
+        if value.isdigit() and 1<=int(value)<=len(archives):return archives[int(value)-1]
+        candidate=pathlib.Path(value)
+        if candidate.is_absolute() and candidate.is_file():return candidate
+        print("Укажите существующий архив из списка или его абсолютный путь")
+
+
+def restore_full_backup(plan_path=DEFAULT_PLAN):
+    if not home_vpn_installed():
+        raise SystemExit("Сначала установите HOME-VPN, затем восстановите его настройки из backup")
+    archive=choose_backup_archive()
+    with tempfile.TemporaryDirectory(prefix="home-vpn-full-restore-") as directory:
+        staging=pathlib.Path(directory);working_archive=staging/archive.name
+        if not archive.with_name(archive.name+".sha256").is_file():
+            raise ValueError(f"Нет файла SHA-256: {archive}.sha256")
+        shutil.copy2(archive,working_archive)
+        shutil.copy2(archive.with_name(archive.name+".sha256"),working_archive.with_name(working_archive.name+".sha256"))
+        verify_full_backup(working_archive)
+        print(f"Backup проверен: {archive}")
+        print("Будут заменены настройки и данные сайта, 3x-ui, TLS/Nginx и Telegram-бота.")
+        if input("Для восстановления введите 'RESTORE HOME VPN': ").strip()!="RESTORE HOME VPN":
+            raise SystemExit("Восстановление отменено")
+        rollback=create_full_backup()
+        active=active_managed_services()
+        try:
+            if active:run(["systemctl", "stop", *active], timeout=180)
+            with tarfile.open(working_archive,"r:gz") as bundle:
+                members=restorable_backup_members(bundle)
+                bundle.extractall("/",members=members)
+            for database in (pathlib.Path("/etc/x-ui/x-ui.db"),pathlib.Path("/var/lib/vpn-shop/shop.db")):
+                if not database.is_file():continue
+                connection=sqlite3.connect("file:"+str(database)+"?mode=ro",uri=True)
+                try:result=connection.execute("PRAGMA integrity_check").fetchone()[0]
+                finally:connection.close()
+                if result!="ok":raise RuntimeError(f"SQLite повреждена после восстановления: {database}: {result}")
+            run(["systemctl","daemon-reload"])
+            if shutil.which("nginx"):
+                result=run(["nginx","-t"],capture=True,check=False)
+                if result.returncode:raise RuntimeError(result.stderr.strip() or "nginx -t завершился ошибкой")
+            if shutil.which("ufw"):run(["ufw","reload"],check=False)
+        except Exception as error:
+            print(f"Восстановление завершилось ошибкой: {error}")
+            print(f"Rollback-архив текущего состояния: {rollback}")
+            raise
+        finally:
+            if active:run(["systemctl", "start", *active], timeout=180, check=False)
+    if pathlib.Path(plan_path).is_file():run([sys.executable,SMOKE_TEST,"--config",plan_path],check=False)
+    show_results(plan_path)
+    print(f"\nНастройки восстановлены из {archive}")
+    print(f"Защитный rollback сохранён: {rollback}")
 
 
 def update_home_vpn(plan_path=DEFAULT_PLAN):
@@ -716,7 +957,7 @@ def main():
                         help="домен сайта для новой или нестандартной конфигурации")
     parser.add_argument("--panel-domain", default="",
                         help="домен 3x-ui для новой или нестандартной конфигурации")
-    parser.add_argument("--action", choices=("install", "update", "remove"),
+    parser.add_argument("--action", choices=("install", "update", "backup", "restore", "remove"),
                         help="выбрать действие без стартового меню")
     arguments = parser.parse_args()
     if os.geteuid() != 0:
@@ -725,6 +966,8 @@ def main():
     action = arguments.action or choose_action()
     if action == "exit":return
     if action == "update":update_home_vpn(arguments.plan);return
+    if action == "backup":create_full_backup();return
+    if action == "restore":restore_full_backup(arguments.plan);return
     if action == "remove":remove_home_vpn();return
 
     answers = collect_answers(arguments.site_domain, arguments.panel_domain)

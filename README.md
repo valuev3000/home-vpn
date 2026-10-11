@@ -18,13 +18,14 @@ firewall, Telegram и проверка): [docs/installation.md](docs/installatio
 Telegram и учётные данные, а затем установит зафиксированный по SHA-256 набор
 3x-ui, сайт, панели, резервное копирование и проверит публичный `/health`:
 
-Одна команда для установки, обновления или удаления:
+Одна команда для установки, обновления, полного backup, восстановления или удаления:
 
 ```bash
 curl -fsSLo /tmp/home-vpn-install.sh https://raw.githubusercontent.com/valuev3000/home-vpn/main/install-single-node.sh && sudo bash /tmp/home-vpn-install.sh
 ```
 
-Мастер покажет меню действия. Для новой VPS домены можно передать флагами
+Мастер определит установленный HOME-VPN и покажет меню установки, обновления,
+создания/восстановления полного backup и удаления. Для новой VPS домены можно передать флагами
 `--site-domain vpn.example.com --panel-domain panel.example.com`; если их нет,
 мастер запросит домены только после неудачного автоопределения.
 
