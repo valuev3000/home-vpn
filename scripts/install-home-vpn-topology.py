@@ -86,6 +86,23 @@ def valid_ip(value, label):
         raise SystemExit(f"{label}: нужен IP-адрес, получено {value!r}") from error
 
 
+def valid_country(value, label="Код страны"):
+    value = str(value or "").strip().upper()
+    if not re.fullmatch(r"[A-Z]{2,3}", value):
+        raise SystemExit(
+            f"{label}: нужны две или три латинские буквы, например EE или EST"
+        )
+    return value
+
+
+def ask_country(prompt, default="DE"):
+    while True:
+        try:
+            return valid_country(ask(prompt, default), prompt)
+        except SystemExit as error:
+            print(error)
+
+
 def safe_id(value):
     value = re.sub(r"[^a-z0-9-]+", "-", value.lower()).strip("-")
     if not value:
@@ -122,7 +139,7 @@ def valid_tls_path(value, label):
 
 
 def node_wizard(index, mode, central_address=None):
-    country = ask(f"Нода {index}: код страны", "DE").upper()
+    country = ask_country(f"Нода {index}: код страны")
     node_id = safe_id(ask(f"Нода {index}: ID", "foreign-" + str(index)))
     name = ask(f"Нода {index}: название", f"Зарубежная VPN-нода {index}")
     ssh_host = ask(f"Нода {index}: root SSH (имя из ~/.ssh/config или root@host)", f"root@vpn-node-{index}.example.com")
@@ -221,6 +238,7 @@ def validate_topology(topology):
             if not node.get(key):
                 raise SystemExit(f"topology.nodes[{index - 1}].{key} обязателен")
         valid_ip(node["address"], f"Адрес ноды {index}")
+        valid_country(node["country"], f"Код страны ноды {index}")
         api_host = str(node.get("api_host") or "")
         if api_host and not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?", api_host):
             raise SystemExit(f"api_host ноды {index}: нужно DNS-имя без схемы и пути")

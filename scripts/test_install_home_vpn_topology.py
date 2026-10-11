@@ -36,6 +36,26 @@ def topology(mode=1, nodes=1):
 
 
 class TopologyValidationTests(unittest.TestCase):
+    def test_country_accepts_two_or_three_letters(self):
+        for country in ("EE", "EST"):
+            with self.subTest(country=country):
+                value = topology(3)
+                value["nodes"][0]["country"] = country
+                MODULE.validate_topology(value)
+        value = topology(3)
+        value["nodes"][0]["country"] = "ESTO"
+        with self.assertRaisesRegex(SystemExit, "две или три"):
+            MODULE.validate_topology(value)
+
+    def test_country_question_repeats_after_invalid_input(self):
+        answers = iter(("1", "est"))
+        original = MODULE.ask
+        MODULE.ask = lambda _prompt, _default: next(answers)
+        try:
+            self.assertEqual("EST", MODULE.ask_country("Код страны"))
+        finally:
+            MODULE.ask = original
+
     def test_preserve_is_limited_to_single_server(self):
         value=topology(3);value["xui_install_mode"]="preserve";MODULE.validate_topology(value)
         value=topology(1);value["xui_install_mode"]="preserve"

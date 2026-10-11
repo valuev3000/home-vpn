@@ -200,6 +200,24 @@ def validate_email(value):
     return value
 
 
+def validate_country(value):
+    value = str(value or "").strip().upper()
+    if not re.fullmatch(r"[A-Z]{2,3}", value):
+        raise SystemExit(
+            "Код страны должен состоять из двух или трёх латинских букв, "
+            "например EE или EST"
+        )
+    return value
+
+
+def ask_country(prompt="Код страны ноды", default="DE"):
+    while True:
+        try:
+            return validate_country(ask(prompt, default))
+        except SystemExit as error:
+            print(error)
+
+
 def validate_https_url(value):
     parsed = urllib.parse.urlparse(str(value or ""))
     if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
@@ -457,9 +475,7 @@ def collect_answers(site_domain_override="", panel_domain_override=""):
     ssh_port = detected_ssh_port()
     print(f"Определено автоматически: IPv4 {public_ip}, SSH-порт {ssh_port}")
     cert_email = validate_email(ask("Email для Let's Encrypt"))
-    country = ask("Код страны ноды", "DE").upper()
-    if not re.fullmatch(r"[A-Z]{2}", country):
-        raise SystemExit("Код страны должен состоять из двух латинских букв")
+    country = ask_country()
     node_name = ask("Название VPN-ноды", "Main VPN node")
     sni = validate_domain(ask("SNI маскировки", "dl.google.com"), "SNI")
     bot_enabled = ask_yes_no("Установить Telegram-бота?", True)

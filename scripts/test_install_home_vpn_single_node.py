@@ -13,6 +13,22 @@ SPEC.loader.exec_module(MODULE)
 
 
 class ValidationTests(unittest.TestCase):
+    def test_country_accepts_iso_alpha2_and_alpha3(self):
+        self.assertEqual("EE", MODULE.validate_country("ee"))
+        self.assertEqual("EST", MODULE.validate_country("est"))
+        for value in ("E", "ESTO", "E1"):
+            with self.subTest(value=value), self.assertRaises(SystemExit):
+                MODULE.validate_country(value)
+
+    def test_country_question_repeats_after_invalid_input(self):
+        answers = iter(("ESTO", "est"))
+        original = MODULE.ask
+        MODULE.ask = lambda _prompt, _default: next(answers)
+        try:
+            self.assertEqual("EST", MODULE.ask_country())
+        finally:
+            MODULE.ask = original
+
     def test_domains_are_normalized(self):
         self.assertEqual("vpn.example.com", MODULE.validate_domain("VPN.Example.COM.", "domain"))
 
