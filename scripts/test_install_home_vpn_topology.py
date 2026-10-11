@@ -258,7 +258,14 @@ class GeneratedConfigurationTests(unittest.TestCase):
         finally:MODULE.ssh_command=original
         self.assertEqual("local" if topology(3)["site"]["ssh_host"]=="local" else "root@node-1.example.test",calls[0][0])
         self.assertIn("proxy_pass http://127.0.0.1:8080",calls[0][2]["input_text"])
+        self.assertIn("proxy_intercept_errors off",calls[0][2]["input_text"])
         self.assertIn("pattern.search(text)",calls[0][1][2])
+
+    def test_preserved_route_does_not_hide_application_errors(self):
+        source=SCRIPT.read_text(encoding="utf-8")
+        start=source.index("def configure_preserved_nginx_route")
+        end=source.index("def configure_mode3_public_route")
+        self.assertIn("proxy_intercept_errors off",source[start:end])
 
     def test_local_sni_uses_kit_domain_flag_without_shared_certificate(self):
         source=SCRIPT.read_text(encoding="utf-8")

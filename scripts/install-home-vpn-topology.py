@@ -994,6 +994,7 @@ def mode3_nginx_config(site):
         proxy_set_header X-Forwarded-For $proxy_protocol_addr;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header Connection "";
+        proxy_intercept_errors off;
     }}
 }}
 '''
@@ -1009,6 +1010,7 @@ def configure_kit_nginx_route(topology):
         proxy_set_header X-Forwarded-For $proxy_protocol_addr;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header Connection "";
+        proxy_intercept_errors off;
     }'''
     code=r'''import os,pathlib,re,shutil,subprocess,sys,tempfile
 path=pathlib.Path("/etc/nginx/conf.d/kit.conf");replacement=sys.stdin.read().rstrip()
@@ -1047,6 +1049,7 @@ def configure_preserved_nginx_route(topology):
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto https;
     proxy_set_header Connection "";
+    proxy_intercept_errors off;
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
 }
 '''
