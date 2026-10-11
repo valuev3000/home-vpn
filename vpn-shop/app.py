@@ -1034,20 +1034,23 @@ class H(BaseHTTPRequestHandler):
   try:return str(ipaddress.ip_address(candidate))
   except ValueError:return str(self.client_address[0] or '')[:64]
  def same_origin(self):
-  origin=self.headers.get('Origin','')
-  if not origin:return APP_ENV=='test'
+  # Browsers normally send Origin for form POSTs, but privacy extensions and
+  # some embedded browsers omit it. In that case a same-origin Referer is a
+  # safe fallback. Never let Referer override an explicitly supplied Origin.
+  source=self.headers.get('Origin','').strip() or self.headers.get('Referer','').strip()
+  if not source:return APP_ENV=='test'
   try:
-   parsed=urlparse(origin);host=urlparse('//'+self.headers.get('Host',''))
+   parsed=urlparse(source);host=urlparse('//'+self.headers.get('Host',''))
    expected_scheme=urlparse(PUBLIC).scheme or 'https';origin_port=parsed.port or (443 if parsed.scheme=='https' else 80);host_port=host.port or (443 if expected_scheme=='https' else 80)
    scheme_ok=parsed.scheme==expected_scheme if host.port is None else parsed.scheme in ('http','https')
-   return scheme_ok and parsed.hostname==host.hostname and origin_port==host_port
+   return scheme_ok and parsed.hostname==host.hostname and origin_port==host_port and not parsed.username and not parsed.password
   except ValueError:return False
  def sendx(self,code,data,typ='text/html; charset=utf-8'):
   if isinstance(data,str):data=data.encode()
   if typ.startswith('text/html') and b'<div class=w>' in data:
    username=self.who();tools=user_tools(username);tools=(f'<a class=icon-action href=/mode aria-label="Сменить режим">⇄ <span class=desktop-label>Режим</span></a>'+tools) if self.standby_admin() and not self.isadmin() else tools;data=data.replace(b'<div data-user-tools></div>',tools.encode(),1);banner=telegram_link_warning(username)+maintenance_banner(username)
    if banner:data=data.replace(b'<div class=w>',b'<div class=w>'+banner.encode(),1)
-  self.send_response(code);self.send_header('Content-Type',typ);self.send_header('Content-Length',str(len(data)));self.send_header('X-Content-Type-Options','nosniff');self.send_header('X-Frame-Options','DENY');self.send_header('Referrer-Policy','no-referrer');self.send_header('Permissions-Policy','camera=(), microphone=(), geolocation=()');self.send_header('Content-Security-Policy',"default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+  self.send_response(code);self.send_header('Content-Type',typ);self.send_header('Content-Length',str(len(data)));self.send_header('X-Content-Type-Options','nosniff');self.send_header('X-Frame-Options','DENY');self.send_header('Referrer-Policy','same-origin');self.send_header('Permissions-Policy','camera=(), microphone=(), geolocation=()');self.send_header('Content-Security-Policy',"default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
   if PUBLIC.startswith('https://'):self.send_header('Strict-Transport-Security','max-age=31536000; includeSubDomains')
   self.end_headers()
   if self.command!='HEAD':self.wfile.write(data)

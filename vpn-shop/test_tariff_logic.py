@@ -413,8 +413,19 @@ class TelegramSiteRegistrationTests(unittest.TestCase):
             response=connection.getresponse();response.read();self.assertEqual(response.status,403)
             origin=f'http://127.0.0.1:{self.server.server_port}'
             connection.request('POST','/login',body,{'Content-Type':'application/x-www-form-urlencoded','Origin':origin})
-            response=connection.getresponse();response.read();self.assertEqual(response.status,401);connection.close()
+            response=connection.getresponse();response.read();self.assertEqual(response.status,401)
+            connection.request('POST','/login',body,{'Content-Type':'application/x-www-form-urlencoded','Referer':origin+'/login'})
+            response=connection.getresponse();response.read();self.assertEqual(response.status,401)
+            connection.request('POST','/login',body,{'Content-Type':'application/x-www-form-urlencoded','Referer':'https://attacker.invalid/login'})
+            response=connection.getresponse();response.read();self.assertEqual(response.status,403)
+            connection.request('POST','/login',body,{'Content-Type':'application/x-www-form-urlencoded','Origin':'https://attacker.invalid','Referer':origin+'/login'})
+            response=connection.getresponse();response.read();self.assertEqual(response.status,403);connection.close()
         finally:APP.APP_ENV=previous
+
+    def test_pages_keep_same_origin_referrer_for_form_validation(self):
+        connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3);connection.request('GET','/login')
+        response=connection.getresponse();response.read();connection.close()
+        self.assertEqual(response.status,200);self.assertEqual(response.getheader('Referrer-Policy'),'same-origin')
 
     def test_guest_support_creates_separate_ticket_and_secret_chat_link(self):
         body='name=Guest+User&contact=&message=Please+help+with+VPN'
