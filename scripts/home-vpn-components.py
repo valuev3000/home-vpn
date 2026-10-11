@@ -2,6 +2,7 @@
 """Install standalone HOME-VPN components on dedicated servers."""
 
 import getpass
+import ipaddress
 import json
 import os
 import pathlib
@@ -45,7 +46,8 @@ def install_bot():
     public = public.rstrip("/")
     api = answer("shop_api_url", "Внутренний loopback URL API сайта", "http://127.0.0.1:8080")
     parsed_api=__import__('urllib.parse',fromlist=['urlparse']).urlparse(api)
-    if parsed_api.hostname not in ("127.0.0.1","::1","localhost"):raise SystemExit("Внутренний API бота должен использовать loopback")
+    if parsed_api.hostname not in ("127.0.0.1","::1","localhost") and parsed_api.scheme!="https":
+        raise SystemExit("Удалённый API сайта для бота должен использовать HTTPS")
     secret = answer("shop_api_secret", "API_SECRET с сервера сайта", secret=True)
     token = answer("telegram_token", "Telegram Bot Token", secret=True)
     admin_id = answer("telegram_admin_id", "Цифровой Telegram ID администратора")
@@ -58,7 +60,11 @@ def install_bot():
     admin_path = answer("admin_panel_url", "Закрытый URL админ-панели", public + "/private-admin-path")
     panel_url = answer("bot_admin_url", "Публичный URL отдельной панели бота", "https://bot-admin.my.domain.ru")
     panel_bind = answer("bot_panel_bind", "Адрес прослушивания панели (127.0.0.1 для reverse proxy)", "127.0.0.1")
-    if panel_bind not in ("127.0.0.1", "::1"): raise SystemExit("Панель бота может слушать только loopback 127.0.0.1 или ::1")
+    try:panel_address=ipaddress.ip_address(panel_bind)
+    except ValueError as error:raise SystemExit("Адрес панели бота должен быть IP-адресом") from error
+    private_panel=panel_address.is_private and not panel_address.is_unspecified and not panel_address.is_link_local
+    if not (panel_address.is_loopback or private_panel):
+        raise SystemExit("Панель бота может слушать только loopback или приватный адрес защищённой сети")
     panel_port = answer("bot_panel_port", "Внутренний порт панели", "8090")
     if not panel_port.isdigit(): raise SystemExit("Порт панели должен быть числом")
     panel_user = answer("bot_panel_user", "Логин панели бота", "bot-admin")

@@ -15,6 +15,17 @@ BOT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BOT)
 ADMIN_LOADER=importlib.machinery.SourceFileLoader("vpn_bot_admin_control",os.path.join(os.path.dirname(__file__),"admin-control.py"))
 ADMIN_SPEC=importlib.util.spec_from_loader("vpn_bot_admin_control",ADMIN_LOADER);ADMIN_CONTROL=importlib.util.module_from_spec(ADMIN_SPEC);ADMIN_LOADER.exec_module(ADMIN_CONTROL)
+PANEL_LOADER=importlib.machinery.SourceFileLoader("vpn_bot_admin_panel",os.path.join(os.path.dirname(__file__),"admin.py"))
+PANEL_SPEC=importlib.util.spec_from_loader("vpn_bot_admin_panel",PANEL_LOADER);PANEL=importlib.util.module_from_spec(PANEL_SPEC);PANEL_LOADER.exec_module(PANEL)
+
+
+class PanelRoutingTests(unittest.TestCase):
+    def test_all_panel_routes_remain_under_secret_entry_path(self):
+        self.assertEqual(PANEL.ENTRY+"/",PANEL.route("/"))
+        for suffix in ("/settings","/menu","/action","/logout"):
+            self.assertTrue(PANEL.route(suffix).startswith(PANEL.ENTRY+"/"))
+        navigation=PANEL.navigation("status")
+        self.assertIn(PANEL.route("/settings"),navigation);self.assertNotIn('href=/settings',navigation)
 
 
 class PaymentTimerTests(unittest.TestCase):

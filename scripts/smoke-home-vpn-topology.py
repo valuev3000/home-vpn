@@ -39,11 +39,18 @@ def smoke(topology):
     check_public(site["public_url"])
     base=r'''set -Eeuo pipefail
 systemctl is-active --quiet vpn-shop
-'''
-    if bool((topology.get("telegram_bot") or {}).get("enabled",True)):
-        base+=r'''systemctl is-active --quiet vpn-bot vpn-bot-admin home-vpn-bot-egress
 ss -lntH | grep -Eq '127\.0\.0\.1:8080|\[::1\]:8080'
-ss -lntH | grep -Eq '127\.0\.0\.1:8090|\[::1\]:8090'
+'''
+    ssh(target,base)
+    bot=(topology.get("telegram_bot") or {});placement=str(bot.get("placement") or "control")
+    if bool(bot.get("enabled",True)):
+        selected=next((node for node in topology["nodes"] if node["id"]==placement),None)
+        bot_target=selected["ssh_host"] if selected else target
+        tunnelled=bool(selected and target=="local")
+        panel_bind="127.0.0.1" if tunnelled or not selected else selected["address"]
+        bot_check=r'''set -Eeuo pipefail
+systemctl is-active --quiet vpn-bot vpn-bot-admin home-vpn-bot-egress
+ss -lntH | grep -Fq __BOT_PANEL_LISTEN__
 ! ss -lntH | grep -Eq '0\.0\.0\.0:8090|\[::\]:8090'
 python3 - <<'PY'
 import json,pathlib
@@ -56,14 +63,14 @@ values={}
 for line in pathlib.Path('/etc/vpn-bot.env').read_text().splitlines():
  if '=' in line and not line.lstrip().startswith('#'):
   key,value=line.split('=',1);values[key]=value
-assert values['SHOP_API_URL'].split('://',1)[-1].split(':',1)[0] in ('127.0.0.1','localhost','[::1]')
+assert values['SHOP_API_URL'].startswith(('http://127.0.0.1:','http://[::1]:','https://'))
 assert values['TELEGRAM_PROXY_URL'].startswith('http://127.0.0.1:') or values['TELEGRAM_PROXY_URL'].startswith('http://[::1]:')
 PY
-'''
-    else:
-        base+=r'''ss -lntH | grep -Eq '127\.0\.0\.1:8080|\[::1\]:8080'
-'''
-    ssh(target,base)
+'''.replace("__BOT_PANEL_LISTEN__",shlex.quote(("["+panel_bind+"]" if ":" in panel_bind else panel_bind)+":8090"))
+        ssh(bot_target,bot_check)
+        if tunnelled:
+            tunnel_port=int(bot.get("admin_tunnel_port",18090))
+            ssh(target,f"set -Eeuo pipefail\nsystemctl is-active --quiet home-vpn-bot-admin-tunnel.service\nss -lntH | grep -Fq {shlex.quote('127.0.0.1:'+str(tunnel_port))}\n")
     cascade=r'''set -Eeuo pipefail
 systemctl is-active --quiet home-vpn-cascade.service
 nft -c -f /etc/home-vpn/cascade.nft

@@ -511,7 +511,7 @@ def build_topology(*, public_ip, site_domain, panel_domain, country, node_name,
             "url": validate_https_url(installer_url),
             "sha256": installer_sha256,
         },
-        "telegram_bot": {"enabled": bool(bot_enabled)},
+        "telegram_bot": {"enabled": bool(bot_enabled),"placement":"control"},
         "telegram_egress": {
             "listen": "127.0.0.1", "port": 18080,
             "strategy": "leastPing", "probe_interval": "30s",
@@ -732,9 +732,9 @@ def saved_topology_mode(plan_path=DEFAULT_PLAN):
 def choose_topology_mode(plan_path=DEFAULT_PLAN):
     default=str(saved_topology_mode(plan_path) or 3)
     print("\nАрхитектура HOME-VPN:")
-    print("  1 — центральная VPS: сайт, панели, бот, egress")
+    print("  1 — центральная VPS: сайт и панели; бот — на выбранной VPS")
     print("      VPN: клиент → иностранная VPS; заглушка: только иностранные ноды")
-    print("  2 — центральная VPS + cascade")
+    print("  2 — центральная VPS + cascade; бот — на выбранной VPS")
     print("      VPN: клиент → центральная VPS → иностранная VPS; заглушка: только иностранные ноды")
     print("  3 — единственная иностранная VPS выполняет все роли")
     print("      VPN: клиент → единственная VPS; заглушка: запрещена")
@@ -752,7 +752,7 @@ def run_multinode_installer(mode,plan_path,plan_only=False):
             "центральную VPS без VPN-роли либо выберите mode 3."
         )
     command=[sys.executable,TOPOLOGY_INSTALLER,"--mode",str(mode),"--local-control-node","--write-plan",plan_path]
-    if not plan_only:command.extend(("--apply","--interactive-confirm"))
+    if not plan_only:command.extend(("--apply","--interactive-confirm","--bootstrap-ssh"))
     result=run(command,check=False)
     expected_dry_run=plan_only and result.returncode==1 and pathlib.Path(plan_path).is_file()
     if (plan_only and not expected_dry_run) or (not plan_only and result.returncode):
@@ -776,16 +776,37 @@ archive=$(find /root -maxdepth 1 -type f \( -name 'kit-backup-*.tar.gz' -o -name
 test -n "$archive"
 (cd /root && sha256sum -c "$(basename "$archive").sha256" >/dev/null)
 tar -tzf "$archive" >/dev/null
-printf '%s\n' "$archive"
+printf 'XUI=%s\n' "$archive"
+if [ -s /etc/vpn-bot.env ]; then
+  bot_services=""
+  for service in vpn-bot vpn-bot-admin home-vpn-bot-egress; do systemctl is-active --quiet "$service" && bot_services="$bot_services $service" || true; done
+  [ -z "$bot_services" ] || systemctl stop $bot_services
+  restart_bot_services() { [ -z "$bot_services" ] || systemctl start $bot_services; }
+  trap restart_bot_services EXIT
+  stamp=$(date -u +%Y%m%d-%H%M%S)
+  bot_archive="/root/home-vpn-bot-full-${stamp}.tar.gz"
+  bot_items="etc/vpn-bot.env"
+  for item in etc/vpn-bot-admin.env etc/vpn-bot-menu.json var/lib/vpn-bot; do [ ! -e "/$item" ] || bot_items="$bot_items $item"; done
+  tar -C / -czf "$bot_archive" $bot_items
+  chmod 0600 "$bot_archive"
+  tar -tzf "$bot_archive" >/dev/null
+  (cd /root && sha256sum "$(basename "$bot_archive")" > "$(basename "$bot_archive").sha256" && sha256sum -c "$(basename "$bot_archive").sha256" >/dev/null)
+  chmod 0600 "${bot_archive}.sha256"
+  restart_bot_services
+  trap - EXIT
+  printf 'BOT=%s\n' "$bot_archive"
+fi
 '''
     for node in plan.get("nodes") or []:
         target=str(node.get("ssh_host") or "");node_id=str(node.get("id") or "node")
         if not target or target=="local" or target.startswith("-") or not re.fullmatch(r"[A-Za-z0-9_.@:%\[\]-]+",target):
             raise SystemExit(f"Небезопасный SSH target в topology plan: {target!r}")
         result=run(["ssh","--",target,"bash -s"],input_text=script,capture=True,timeout=1800)
-        archive=result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
-        if not archive.startswith("/root/"):raise RuntimeError(f"{node_id}: backup не вернул безопасный путь")
-        results.append((node_id,target,archive));print(f"Проверенный backup 3x-ui {node_id} ({target}): {archive}")
+        paths=dict(line.split("=",1) for line in result.stdout.splitlines() if "=" in line)
+        archive=paths.get("XUI","");bot_archive=paths.get("BOT","")
+        if not archive.startswith("/root/") or (bot_archive and not bot_archive.startswith("/root/")):raise RuntimeError(f"{node_id}: backup не вернул безопасный путь")
+        results.append((node_id,target,archive,bot_archive));print(f"Проверенный backup 3x-ui {node_id} ({target}): {archive}")
+        if bot_archive:print(f"Полный backup Telegram-бота {node_id} ({target}): {bot_archive}")
     return results
 
 

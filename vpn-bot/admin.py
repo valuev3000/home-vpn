@@ -25,6 +25,10 @@ TLS_CERT = os.getenv("BOT_PANEL_TLS_CERT", "")
 TLS_KEY = os.getenv("BOT_PANEL_TLS_KEY", "")
 SECURE_COOKIE = os.getenv("BOT_PANEL_SECURE_COOKIE", "1") == "1"
 ATTEMPTS = {}
+
+
+def route(suffix="/"):
+    return ENTRY.rstrip("/") + (suffix if suffix.startswith("/") else "/" + suffix)
 MENU_ITEMS = {
     "new": "Новая подписка", "renew": "Продление", "upgrade": "Изменение тарифа",
     "subscriptions": "Подписки и заказы", "link": "Привязка подписки", "support": "Поддержка",
@@ -45,7 +49,7 @@ def page(title, body):
 
 
 def navigation(active):
-    return '<div class=nav><a class="'+('on' if active=='status' else '')+'" href=/>Состояние</a><a class="'+('on' if active=='menu' else '')+'" href=/menu>Меню и приветствие</a><a class="'+('on' if active=='settings' else '')+'" href=/settings>Доступ</a></div>'
+    return '<div class=nav><a class="'+('on' if active=='status' else '')+'" href="'+route('/')+'">Состояние</a><a class="'+('on' if active=='menu' else '')+'" href="'+route('/menu')+'">Меню и приветствие</a><a class="'+('on' if active=='settings' else '')+'" href="'+route('/settings')+'">Доступ</a></div>'
 
 
 def csrf_token():
@@ -73,18 +77,18 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path=urlparse(self.path).path
         if path==ENTRY:
-            if self.session(): return self.redirect("/")
+            if self.session(): return self.redirect(route('/'))
             return self.sendx(200,page("Вход",f'''<div class="card login"><h1>Панель Telegram-бота</h1><p>Закрытая точка управления.</p><form method=post action="{html.escape(ENTRY,quote=True)}"><label>Логин</label><input name=username required><label>Пароль</label><input name=password type=password required><button>Войти</button></form></div>'''))
-        if path=="/logout": return self.redirect(ENTRY,"bot_panel=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict")
+        if path==route('/logout'): return self.redirect(ENTRY,f"bot_panel=; Path={route('/')}; Max-Age=0; HttpOnly; SameSite=Strict")
         if not self.session(): return self.redirect(ENTRY)
-        if path=="/settings":
+        if path==route('/settings'):
             try: settings=control("get-settings");error=""
             except Exception as exception:settings={};error=f'<div class=card><b class=bad>{html.escape(str(exception))}</b></div>'
             saved='<div class="card saved"><b class=ok>✓ Настройки сохранены, бот перезапущен.</b></div>' if parse_qs(urlparse(self.path).query).get("saved") else ""
             token_state='<span class=ok>Bot Token настроен</span>' if settings.get('token_configured') else '<span class=bad>Bot Token не задан</span>'
-            body=f'''<div class=head><div class=brand>🤖 Панель Telegram-бота</div><div><b>{html.escape(USER)}</b><br><a class=soft href=/logout>Выйти</a></div></div>{navigation('settings')}{saved}{error}<div class=card><h1>Доступ к боту</h1><p>{token_state}</p><form class=stack method=post action=/settings><input type=hidden name=csrf value="{csrf_token()}"><label>Telegram Admin ID</label><input name=admin_id inputmode=numeric pattern="[0-9]+" required value="{html.escape(str(settings.get('admin_id') or ''),quote=True)}"><small>Цифровой ID пользователя, которому доступны административные функции.</small><label style="display:block;margin-top:18px">Новый Secret key / Bot Token</label><input type=password name=bot_token autocomplete=new-password placeholder="Оставьте пустым, чтобы сохранить текущий"><small>Текущий ключ никогда не отображается. Новый ключ проверяется через Telegram API перед сохранением.</small><div style="margin-top:18px"><button>Сохранить и перезапустить бота</button></div></form></div>'''
+            body=f'''<div class=head><div class=brand>🤖 Панель Telegram-бота</div><div><b>{html.escape(USER)}</b><br><a class=soft href="{route('/logout')}">Выйти</a></div></div>{navigation('settings')}{saved}{error}<div class=card><h1>Доступ к боту</h1><p>{token_state}</p><form class=stack method=post action="{route('/settings')}"><input type=hidden name=csrf value="{csrf_token()}"><label>Telegram Admin ID</label><input name=admin_id inputmode=numeric pattern="[0-9]+" required value="{html.escape(str(settings.get('admin_id') or ''),quote=True)}"><small>Цифровой ID пользователя, которому доступны административные функции.</small><label style="display:block;margin-top:18px">Новый Secret key / Bot Token</label><input type=password name=bot_token autocomplete=new-password placeholder="Оставьте пустым, чтобы сохранить текущий"><small>Текущий ключ никогда не отображается. Новый ключ проверяется через Telegram API перед сохранением.</small><div style="margin-top:18px"><button>Сохранить и перезапустить бота</button></div></form></div>'''
             return self.sendx(200,page("Доступ",body))
-        if path=="/menu":
+        if path==route('/menu'):
             try:
                 config=control("get-menu");error=""
             except Exception as exception:
@@ -95,15 +99,15 @@ class Handler(BaseHTTPRequestHandler):
                 item=(config.get("items") or {}).get(key) or {};checked=" checked" if item.get("enabled") else ""
                 rows.append(f'''<div class=menurow draggable=true data-key="{key}"><div class=rowtools><span class=handle title="Перетащить">↕</span><button class=move type=button onclick="moveRow(this,-1)" title="Выше">↑</button><button class=move type=button onclick="moveRow(this,1)" title="Ниже">↓</button><label class=toggle><input type=checkbox name="enabled_{key}" value=1{checked}> {html.escape(name)}</label></div><input type=text name="label_{key}" maxlength=64 required value="{html.escape(str(item.get('label') or ''),quote=True)}"></div>''')
             saved='<div class="card saved"><b class=ok>✓ Настройки применены, бот перезапущен.</b></div>' if parse_qs(urlparse(self.path).query).get("saved") else ""
-            body=f'''<div class=head><div class=brand>🤖 Панель Telegram-бота</div><div><b>{html.escape(USER)}</b><br><a class=soft href=/logout>Выйти</a></div></div>{navigation('menu')}{saved}{error}<form class=stack method=post action=/menu><input type=hidden name=csrf value="{csrf_token()}"><input type=hidden id=menuOrder name=menu_order value="{','.join(order)}"><div class=card><h2>Приветствие</h2><label>Заголовок</label><input name=welcome_title minlength=3 maxlength=80 required value="{html.escape(str(config.get('welcome_title') or ''),quote=True)}"><label>Текст</label><textarea name=welcome_text minlength=10 maxlength=500 required>{html.escape(str(config.get('welcome_text') or ''))}</textarea></div><div class=card><h2>Пользовательское меню</h2><p><small>Меняйте порядок стрелками или перетаскиванием. Снимите флажок, чтобы скрыть кнопку. Подпись можно изменить вместе с эмодзи.</small></p><div id=menuRows>{''.join(rows)}</div><button type=submit>Сохранить и применить</button></div></form><script>const box=document.getElementById('menuRows'),order=document.getElementById('menuOrder');function syncOrder(){{order.value=[...box.querySelectorAll('.menurow')].map(x=>x.dataset.key).join(',')}}function moveRow(button,delta){{const row=button.closest('.menurow'),other=delta<0?row.previousElementSibling:row.nextElementSibling;if(!other)return;if(delta<0)box.insertBefore(row,other);else box.insertBefore(other,row);syncOrder()}}let dragged=null;box.querySelectorAll('.menurow').forEach(row=>{{row.addEventListener('dragstart',()=>{{dragged=row;row.classList.add('dragging')}});row.addEventListener('dragend',()=>{{row.classList.remove('dragging');dragged=null;syncOrder()}});row.addEventListener('dragover',event=>event.preventDefault());row.addEventListener('drop',event=>{{event.preventDefault();if(!dragged||dragged===row)return;const rect=row.getBoundingClientRect();box.insertBefore(dragged,event.clientY<rect.top+rect.height/2?row:row.nextSibling);syncOrder()}})}});</script>'''
+            body=f'''<div class=head><div class=brand>🤖 Панель Telegram-бота</div><div><b>{html.escape(USER)}</b><br><a class=soft href="{route('/logout')}">Выйти</a></div></div>{navigation('menu')}{saved}{error}<form class=stack method=post action="{route('/menu')}"><input type=hidden name=csrf value="{csrf_token()}"><input type=hidden id=menuOrder name=menu_order value="{','.join(order)}"><div class=card><h2>Приветствие</h2><label>Заголовок</label><input name=welcome_title minlength=3 maxlength=80 required value="{html.escape(str(config.get('welcome_title') or ''),quote=True)}"><label>Текст</label><textarea name=welcome_text minlength=10 maxlength=500 required>{html.escape(str(config.get('welcome_text') or ''))}</textarea></div><div class=card><h2>Пользовательское меню</h2><p><small>Меняйте порядок стрелками или перетаскиванием. Снимите флажок, чтобы скрыть кнопку. Подпись можно изменить вместе с эмодзи.</small></p><div id=menuRows>{''.join(rows)}</div><button type=submit>Сохранить и применить</button></div></form><script>const box=document.getElementById('menuRows'),order=document.getElementById('menuOrder');function syncOrder(){{order.value=[...box.querySelectorAll('.menurow')].map(x=>x.dataset.key).join(',')}}function moveRow(button,delta){{const row=button.closest('.menurow'),other=delta<0?row.previousElementSibling:row.nextElementSibling;if(!other)return;if(delta<0)box.insertBefore(row,other);else box.insertBefore(other,row);syncOrder()}}let dragged=null;box.querySelectorAll('.menurow').forEach(row=>{{row.addEventListener('dragstart',()=>{{dragged=row;row.classList.add('dragging')}});row.addEventListener('dragend',()=>{{row.classList.remove('dragging');dragged=null;syncOrder()}});row.addEventListener('dragover',event=>event.preventDefault());row.addEventListener('drop',event=>{{event.preventDefault();if(!dragged||dragged===row)return;const rect=row.getBoundingClientRect();box.insertBefore(dragged,event.clientY<rect.top+rect.height/2?row:row.nextSibling);syncOrder()}})}});</script>'''
             return self.sendx(200,page("Меню бота",body))
-        if path!="/": return self.sendx(404,"not found","text/plain")
+        if path!=route('/'): return self.sendx(404,"not found","text/plain")
         try: info=control("status"); error=""
         except Exception as exception: info={};error=f'<div class=card><b class=bad>{html.escape(str(exception))}</b></div>'
         active=bool(info.get("active")); state='<span class=ok>Работает</span>' if active else '<span class=bad>Остановлен</span>'
         tg='<span class=ok>Доступен</span>' if info.get("telegram_ok") else '<span class=bad>Ошибка</span>';site='<span class=ok>Синхронизирован</span>' if info.get("site_ok") and info.get("catalog_ok") else '<span class=bad>Ошибка связи</span>'
-        actions=f'''<form method=post action=/action><input type=hidden name=csrf value="{csrf_token()}"><input type=hidden name=action value={'restart' if active else 'start'}><button>{'Перезапустить' if active else 'Запустить'}</button></form> <form method=post action=/action onsubmit="return confirm('Остановить Telegram-бота?')"><input type=hidden name=csrf value="{csrf_token()}"><input type=hidden name=action value=stop><button class=danger>Остановить</button></form> <form method=post action=/action><input type=hidden name=csrf value="{csrf_token()}"><input type=hidden name=action value=notify><button class=soft>Тест администратору</button></form>'''
-        body=f'''<div class=head><div class=brand>🤖 Панель Telegram-бота</div><div><b>{html.escape(USER)}</b><br><a class=soft href=/logout>Выйти</a></div></div>{navigation('status')}{error}<div class=grid><div class=card><small>Служба</small><h2>{state}</h2></div><div class=card><small>Telegram API</small><h2>{tg}</h2><p>@{html.escape(str(info.get('bot_username') or '—'))}</p></div><div class=card><small>Связь с сайтом</small><h2>{site}</h2><p>{int(info.get('tariff_count') or 0)} тарифов · {html.escape(str(info.get('catalog_currency') or '—'))}</p></div><div class=card><small>Канал</small><h2>{html.escape(str(info.get('channel') or 'не задан'))}</h2></div></div><div class=card><h2>Управление</h2>{actions}<p><small>Тестовое сообщение отправляется только на Telegram Admin ID из раздела «Доступ».</small></p></div><div class=card><h2>Последние события</h2><pre>{html.escape(str(info.get('logs') or 'Журнал пуст'))}</pre></div><script>setTimeout(function(){{location.reload()}},30000)</script>'''
+        actions=f'''<form method=post action="{route('/action')}"><input type=hidden name=csrf value="{csrf_token()}"><input type=hidden name=action value={'restart' if active else 'start'}><button>{'Перезапустить' if active else 'Запустить'}</button></form> <form method=post action="{route('/action')}" onsubmit="return confirm('Остановить Telegram-бота?')"><input type=hidden name=csrf value="{csrf_token()}"><input type=hidden name=action value=stop><button class=danger>Остановить</button></form> <form method=post action="{route('/action')}"><input type=hidden name=csrf value="{csrf_token()}"><input type=hidden name=action value=notify><button class=soft>Тест администратору</button></form>'''
+        body=f'''<div class=head><div class=brand>🤖 Панель Telegram-бота</div><div><b>{html.escape(USER)}</b><br><a class=soft href="{route('/logout')}">Выйти</a></div></div>{navigation('status')}{error}<div class=grid><div class=card><small>Служба</small><h2>{state}</h2></div><div class=card><small>Telegram API</small><h2>{tg}</h2><p>@{html.escape(str(info.get('bot_username') or '—'))}</p></div><div class=card><small>Связь с сайтом</small><h2>{site}</h2><p>{int(info.get('tariff_count') or 0)} тарифов · {html.escape(str(info.get('catalog_currency') or '—'))}</p></div><div class=card><small>Канал</small><h2>{html.escape(str(info.get('channel') or 'не задан'))}</h2></div></div><div class=card><h2>Управление</h2>{actions}<p><small>Тестовое сообщение отправляется только на Telegram Admin ID из раздела «Доступ».</small></p></div><div class=card><h2>Последние события</h2><pre>{html.escape(str(info.get('logs') or 'Журнал пуст'))}</pre></div><script>setTimeout(function(){{location.reload()}},30000)</script>'''
         return self.sendx(200,page("Управление ботом",body))
     def do_POST(self):
         path=urlparse(self.path).path; data=self.data(); ip=self.client_address[0]
@@ -112,25 +116,25 @@ class Handler(BaseHTTPRequestHandler):
             if len(recent)>=10:return self.sendx(429,"Слишком много попыток","text/plain")
             if not (secrets.compare_digest(data.get("username",""),USER) and secrets.compare_digest(data.get("password",""),PASSWORD)):
                 recent.append(time.time());return self.sendx(401,page("Ошибка",f'<div class="card login"><h1 class=bad>Неправильный логин или пароль</h1><a class=btn href="{html.escape(ENTRY,quote=True)}">Повторить</a></div>'))
-            flags="; Secure" if SECURE_COOKIE else "";return self.redirect("/",f"bot_panel={self.token()}; Path=/; Max-Age=28800; HttpOnly; SameSite=Strict{flags}")
+            flags="; Secure" if SECURE_COOKIE else "";return self.redirect(route('/'),f"bot_panel={self.token()}; Path={route('/')}; Max-Age=28800; HttpOnly; SameSite=Strict{flags}")
         if not self.session():return self.redirect(ENTRY)
         if not secrets.compare_digest(data.get("csrf",""),csrf_token()):return self.sendx(403,"Неверный защитный токен","text/plain")
-        if path=="/settings":
+        if path==route('/settings'):
             payload={"admin_id":data.get("admin_id",""),"token":data.get("bot_token","")}
             try:control("save-settings",json.dumps(payload,ensure_ascii=False))
-            except Exception as exception:return self.sendx(400,page("Ошибка",f'<div class=card><h1 class=bad>Настройки не сохранены</h1><p>{html.escape(str(exception))}</p><a class=btn href=/settings>Вернуться</a></div>'))
-            return self.redirect("/settings?saved=1")
-        if path=="/menu":
+            except Exception as exception:return self.sendx(400,page("Ошибка",f'<div class=card><h1 class=bad>Настройки не сохранены</h1><p>{html.escape(str(exception))}</p><a class=btn href="{route("/settings")}">Вернуться</a></div>'))
+            return self.redirect(route('/settings')+"?saved=1")
+        if path==route('/menu'):
             payload={"welcome_title":data.get("welcome_title",""),"welcome_text":data.get("welcome_text",""),"order":[x for x in data.get("menu_order","").split(",") if x],"items":{}}
             for key in MENU_ITEMS:payload["items"][key]={"enabled":data.get("enabled_"+key)=="1","label":data.get("label_"+key,"")}
             try:control("save-menu",json.dumps(payload,ensure_ascii=False))
-            except Exception as exception:return self.sendx(400,page("Ошибка",f'<div class=card><h1 class=bad>Настройки не сохранены</h1><p>{html.escape(str(exception))}</p><a class=btn href=/menu>Вернуться</a></div>'))
-            return self.redirect("/menu?saved=1")
-        if path=="/action":
+            except Exception as exception:return self.sendx(400,page("Ошибка",f'<div class=card><h1 class=bad>Настройки не сохранены</h1><p>{html.escape(str(exception))}</p><a class=btn href="{route("/menu")}">Вернуться</a></div>'))
+            return self.redirect(route('/menu')+"?saved=1")
+        if path==route('/action'):
             action=data.get("action","")
             try: control("notify") if action=="notify" else control("action",action)
-            except Exception as exception:return self.sendx(503,page("Ошибка",f'<div class=card><h1 class=bad>Команда не выполнена</h1><p>{html.escape(str(exception))}</p><a class=btn href=/>Вернуться</a></div>'))
-            return self.redirect("/")
+            except Exception as exception:return self.sendx(503,page("Ошибка",f'<div class=card><h1 class=bad>Команда не выполнена</h1><p>{html.escape(str(exception))}</p><a class=btn href="{route("/")}">Вернуться</a></div>'))
+            return self.redirect(route('/'))
         return self.sendx(404,"not found","text/plain")
     def log_message(self, *_): pass
 

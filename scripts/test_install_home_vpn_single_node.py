@@ -33,15 +33,17 @@ class ValidationTests(unittest.TestCase):
         command=runner.call_args.args[0]
         self.assertIn("--local-control-node",command);self.assertEqual("2",command[command.index("--mode")+1])
         self.assertIn("--interactive-confirm",command)
+        self.assertIn("--bootstrap-ssh",command)
 
     def test_multinode_backup_runs_verified_backup_on_each_foreign_node(self):
         with tempfile.TemporaryDirectory() as directory:
             plan=pathlib.Path(directory)/"plan.json"
             plan.write_text(json.dumps({"mode":1,"nodes":[{"id":"ee-1","ssh_host":"root@edge.example.test"}]}),encoding="utf-8")
-            completed=__import__('subprocess').CompletedProcess([],0,stdout="/root/kit-backup-20260101.tar.gz\n")
+            completed=__import__('subprocess').CompletedProcess([],0,stdout="XUI=/root/kit-backup-20260101.tar.gz\nBOT=/root/home-vpn-bot-full-20260101.tar.gz\n")
             with mock.patch.object(MODULE,"run",return_value=completed) as runner:
                 result=MODULE.backup_topology_nodes(plan)
         self.assertEqual("ee-1",result[0][0]);self.assertEqual("ssh",runner.call_args.args[0][0])
+        self.assertTrue(result[0][3].startswith("/root/home-vpn-bot-full-"))
         self.assertIn("bash -s",runner.call_args.args[0])
 
     def test_multinode_lifecycle_never_requests_xui_removal(self):

@@ -38,10 +38,10 @@ DEFAULT_KIT_URL = "https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/v1.
 DEFAULT_KIT_SHA256 = "2d7a0f0dcc26ea4f8bab3d60e1900e7046a9673a88fef85c03630502120961f0"
 
 
-def run(arguments, *, input_text=None, capture=False, timeout=None):
+def run(arguments, *, input_text=None, capture=False, timeout=None, check=True):
     return subprocess.run(
         [str(item) for item in arguments], input=input_text, text=True,
-        capture_output=capture, timeout=timeout, check=True,
+        capture_output=capture, timeout=timeout, check=check,
     )
 
 
@@ -230,7 +230,7 @@ def node_wizard(index, mode, central_address=None, existing_nodes=None, forbidde
     country = ask_country(f"Нода {index}: код страны")
     node_id = ask_validated(f"Нода {index}: ID","foreign-"+str(index),unique(safe_id,used_ids,"ID ноды уже используется"))
     name = ask(f"Нода {index}: название", f"Зарубежная VPN-нода {index}")
-    ssh_host = ask_validated(f"Нода {index}: root SSH (имя из ~/.ssh/config или root@host)",f"root@vpn-node-{index}.example.com",unique(lambda value:valid_ssh_target(value,f"Нода {index}: SSH"),used_ssh,"Эта VPS уже используется в топологии"))
+    ssh_host = ask_validated(f"Нода {index}: SSH-логин и адрес (например root@203.0.113.20)",f"root@vpn-node-{index}.example.com",unique(lambda value:valid_ssh_target(value,f"Нода {index}: SSH"),used_ssh,"Эта VPS уже используется в топологии"))
     address = ask_validated(f"Нода {index}: адрес в защищённой межсерверной сети",f"10.10.0.{10+index}",unique(lambda value:valid_ip(value,"Адрес ноды"),used_addresses,"Этот адрес ноды уже используется"))
     if mode == 2:
         ingress = ask_validated(f"Нода {index}: отдельный входной IP на центральной ноде",central_address,unique(lambda value:valid_ip(value,"Central ingress"),used_ingress,"Этот входной IP уже используется"))
@@ -250,9 +250,9 @@ def node_wizard(index, mode, central_address=None, existing_nodes=None, forbidde
 
 def print_architecture_table():
     print("Выберите архитектуру:")
-    print(" 1 — управляющая роль: центральная VPS (сайт, панели, бот, egress)")
+    print(" 1 — управляющая роль: центральная VPS (сайт и панели); бот — на выбранной VPS")
     print("     VPN: клиент → иностранная VPS; заглушка: только иностранные ноды")
-    print(" 2 — управляющая роль: центральная VPS + cascade")
+    print(" 2 — управляющая роль: центральная VPS + cascade; бот — на выбранной VPS")
     print("     VPN: клиент → центральная VPS → иностранная VPS; заглушка: только иностранные ноды")
     print(" 3 — управляющая роль: единственная иностранная VPS выполняет все роли")
     print("     VPN: клиент → единственная VPS; заглушка: запрещена")
@@ -281,13 +281,36 @@ def wizard(forced_mode=None, local_control_node=False):
         site_ssh = nodes[0]["ssh_host"]
         site_address = nodes[0]["address"]
         emergency_index = 1
-    public_url = ask_validated("Публичный URL сайта",f"https://{site_address}:8443",lambda value:valid_public_url_value(value,"Публичный URL сайта"))
-    tls_cert = ask_validated("TLS-сертификат сайта на VPS (необязательно)","",lambda value:valid_tls_path(value,"TLS-сертификат сайта") if value else "")
-    tls_key = ask_validated("TLS-ключ сайта на VPS (необязательно)","",lambda value:valid_tls_path(value,"TLS-ключ сайта")) if tls_cert else ""
+    while True:
+        public_url = ask_validated("Публичный HTTPS URL сайта (домен должен указывать на центральную VPS)","",lambda value:valid_public_url_value(value,"Публичный URL сайта"))
+        tls_prompt="TLS-сертификат сайта на VPS (Enter = получить Let's Encrypt автоматически)" if mode in (1,2) else "TLS-сертификат сайта на VPS"
+        tls_cert = ask_validated(tls_prompt,"",lambda value:valid_tls_path(value,"TLS-сертификат сайта") if value else "")
+        tls_key = ask_validated("TLS-ключ сайта на VPS (необязательно)","",lambda value:valid_tls_path(value,"TLS-ключ сайта")) if tls_cert else ""
+        parsed_public=valid_public_url(public_url)
+        try:ipaddress.ip_address(parsed_public.hostname or "");public_is_ip=True
+        except ValueError:public_is_ip=False
+        if mode in (1,2) and parsed_public.scheme=="https" and not tls_cert and public_is_ip:
+            print("Для автоматического Let's Encrypt укажите HTTPS URL с доменом, а не IP-адресом")
+            continue
+        break
+    bot_is_enabled=ask_yes_no("Установить Telegram-бота?",True)
+    bot_placement="control"
+    if bot_is_enabled and mode in (1,2):
+        print("Где установить Telegram-бота, bot-admin и Telegram egress:")
+        print("  0 — центральная управляющая VPS")
+        for index,node in enumerate(nodes,1):print(f"  {index} — {node['name']} ({node['id']}, {node['country']})")
+        while True:
+            selected=ask("Номер VPS для Telegram-бота","0")
+            if selected.isdigit() and 0<=int(selected)<=len(nodes):break
+            print(f"Нужно число от 0 до {len(nodes)}")
+        if int(selected):
+            bot_placement=nodes[int(selected)-1]["id"]
+            if nodes[emergency_index-1]["id"]!=bot_placement and ask_yes_no("Использовать эту же VPS для аварийного MTProto?",True):
+                emergency_index=int(selected)
     topology = {
         "mode": mode,
         "protocol_installer": {"url": installer_url, "sha256": installer_sha256},
-        "telegram_bot": {"enabled": ask_yes_no("Установить Telegram-бот?",True)},
+        "telegram_bot": {"enabled": bot_is_enabled,"placement":bot_placement},
         "telegram_egress": {"listen": "127.0.0.1", "port": 18080, "strategy": "leastPing", "probe_interval": "30s"},
         "site": {"ssh_host": site_ssh, "address": site_address, "public_url": public_url,
                  "tls_cert": tls_cert, "tls_key": tls_key},
@@ -368,6 +391,16 @@ def validate_topology(topology):
         raise SystemExit("ID зарубежных нод должны быть уникальны")
     if topology.get("emergency_node") not in ids:
         raise SystemExit("emergency_node должен ссылаться на существующую ноду")
+    placement=str(bot.get("placement") or "control")
+    if placement!="control" and placement not in ids:
+        raise SystemExit("telegram_bot.placement должен быть control или ID существующей иностранной ноды")
+    if bot.get("enabled",True) and placement!="control":
+        selected=next(node for node in nodes if node["id"]==placement)
+        address=ipaddress.ip_address(selected["address"])
+        if site["ssh_host"]!="local" and (not address.is_private or address.is_unspecified or address.is_link_local):
+            raise SystemExit("Для удалённого bot-admin адрес выбранной ноды должен быть приватным адресом защищённой сети")
+        if urllib.parse.urlparse(site["public_url"]).scheme!="https":
+            raise SystemExit("Удалённый Telegram-бот требует HTTPS public_url центрального сайта")
     if mode == 2:
         ingress = [valid_ip(node.get("ingress_address", ""), "Central ingress") for node in nodes]
         if len(ingress) != len(set(ingress)):
@@ -390,12 +423,28 @@ def show_plan(topology):
         if node.get("sni_mode")=="preserve":masking="сохранение существующей настройки"
         print(f"  SNI: {node['sni']} · {masking}")
     print("Заглушка: " + ("на каждой зарубежной ноде" if topology["mode"] in (1, 2) else "не требуется"))
-    print("Telegram-бот: " + ("центральная VPS" if bot_enabled(topology) else "отключён"))
+    print("Telegram-бот: " + (bot_location_label(topology) if bot_enabled(topology) else "отключён"))
 
 
-def check_servers(topology):
+def ensure_ssh_key_access(target):
+    if target=="local":return
+    probe=run(["ssh","-o","BatchMode=yes","-o","ConnectTimeout=8","--",target,"id -u"],capture=True,check=False)
+    if probe.returncode==0:return
+    ssh_dir=pathlib.Path.home()/".ssh";private_key=ssh_dir/"id_ed25519";public_key=ssh_dir/"id_ed25519.pub"
+    ssh_dir.mkdir(mode=0o700,parents=True,exist_ok=True);ssh_dir.chmod(0o700)
+    if not private_key.exists() or not public_key.exists():
+        print(f"Создаётся SSH-ключ для автоматической настройки {target}")
+        run(["ssh-keygen","-q","-t","ed25519","-N","","-f",private_key])
+    print(f"Введите SSH-пароль для {target}. Он обрабатывается ssh-copy-id и не сохраняется HOME-VPN.")
+    run(["ssh-copy-id","-i",public_key,"-o","StrictHostKeyChecking=accept-new",target],timeout=180)
+    verified=run(["ssh","-o","BatchMode=yes","-o","ConnectTimeout=8","--",target,"id -u"],capture=True,check=False)
+    if verified.returncode or verified.stdout.strip()!="0":raise RuntimeError(f"{target}: не удалось настроить root SSH по ключу")
+
+
+def check_servers(topology,bootstrap_ssh=False):
     targets = {topology["site"]["ssh_host"]} | {node["ssh_host"] for node in topology["nodes"]}
     for target in sorted(targets):
+        if bootstrap_ssh:ensure_ssh_key_access(target)
         result = ssh_command(target, ["id", "-u"], capture=True)
         if result.stdout.strip() != "0":
             raise RuntimeError(f"{target}: для установки нужен root SSH")
@@ -747,6 +796,61 @@ HOME_VPN_INSTALL_BOT=0 python3 /opt/home-vpn-source/scripts/home-vpn-setup.py in
     ssh_script(target, "systemctl restart vpn-shop\n")
 
 
+def ensure_site_tls(topology):
+    """Obtain a browser-trusted certificate for a fresh mode 1/2 control VPS."""
+    if topology["mode"] not in (1,2):return
+    site=topology["site"];parsed=valid_public_url(site["public_url"])
+    if parsed.scheme!="https" or site.get("tls_cert"):return
+    host=parsed.hostname or ""
+    try:ipaddress.ip_address(host)
+    except ValueError:pass
+    else:raise RuntimeError("Для автоматического Let's Encrypt в URL сайта нужен домен, а не IP-адрес")
+    target=site["ssh_host"]
+    script=r'''set -Eeuo pipefail
+domain=$1
+export DEBIAN_FRONTEND=noninteractive
+apt-get update >/dev/null
+apt-get install -y certbot openssl >/dev/null
+cert_dir="/etc/letsencrypt/live/$domain"
+if ! test -s "$cert_dir/fullchain.pem" || ! test -s "$cert_dir/privkey.pem" || \
+   ! openssl x509 -in "$cert_dir/fullchain.pem" -noout -checkhost "$domain" >/dev/null 2>&1 || \
+   ! openssl x509 -in "$cert_dir/fullchain.pem" -noout -checkend 604800 >/dev/null 2>&1; then
+  nginx_was_active=0
+  if systemctl is-active --quiet nginx; then nginx_was_active=1; systemctl stop nginx; fi
+  restore_nginx() { if [ "$nginx_was_active" = 1 ]; then systemctl start nginx; fi; }
+  trap restore_nginx EXIT
+  certbot certonly --standalone --non-interactive --agree-tos \
+    --register-unsafely-without-email --preferred-challenges http -d "$domain"
+  restore_nginx
+  trap - EXIT
+fi
+install -d -m 0755 /etc/letsencrypt/renewal-hooks/pre /etc/letsencrypt/renewal-hooks/post /etc/letsencrypt/renewal-hooks/deploy
+cat >/etc/letsencrypt/renewal-hooks/pre/home-vpn-nginx <<'HOOK'
+#!/bin/sh
+systemctl is-active --quiet nginx && systemctl stop nginx || true
+HOOK
+cat >/etc/letsencrypt/renewal-hooks/post/home-vpn-nginx <<'HOOK'
+#!/bin/sh
+systemctl start nginx || true
+HOOK
+cat >/etc/letsencrypt/renewal-hooks/deploy/home-vpn-nginx <<'HOOK'
+#!/bin/sh
+set -eu
+test -n "${RENEWED_LINEAGE:-}" || exit 0
+test -d /etc/home-vpn/tls || exit 0
+install -m 0640 -o root -g vpnshop "$RENEWED_LINEAGE/fullchain.pem" /etc/home-vpn/tls/site.crt
+install -m 0640 -o root -g vpnshop "$RENEWED_LINEAGE/privkey.pem" /etc/home-vpn/tls/site.key
+nginx -t && systemctl reload nginx
+HOOK
+chmod 0755 /etc/letsencrypt/renewal-hooks/pre/home-vpn-nginx /etc/letsencrypt/renewal-hooks/post/home-vpn-nginx /etc/letsencrypt/renewal-hooks/deploy/home-vpn-nginx
+systemctl enable --now certbot.timer >/dev/null 2>&1 || true
+'''
+    ssh_command(target,["bash","-s","--",host],input_text=script,timeout=1200)
+    site["tls_cert"]=f"/etc/letsencrypt/live/{host}/fullchain.pem"
+    site["tls_key"]=f"/etc/letsencrypt/live/{host}/privkey.pem"
+    print(f"TLS Let's Encrypt готов: {host}; автоматическое продление включено")
+
+
 def site_secrets(target):
     code = r'''import json, pathlib
 values={}
@@ -836,29 +940,28 @@ def bot_egress_config(outbounds, egress=None):
     }
 
 
-def ensure_central_xray(topology):
-    central = topology["site"]["ssh_host"]
+def ensure_xray_on_target(topology,target):
     locate = r'''set -Euo pipefail
 if command -v xray >/dev/null 2>&1; then command -v xray; exit; fi
 find /usr/local/x-ui/bin /opt -maxdepth 4 -type f -name 'xray*' -perm /111 2>/dev/null | head -n1 || true
 '''
-    result = ssh_script(central, locate, capture=True)
+    result = ssh_script(target, locate, capture=True)
     if result.stdout.strip():
         return result.stdout.strip().splitlines()[-1]
     source = topology["nodes"][0]["ssh_host"]
     source_arch = ssh_script(source, "uname -m\n", capture=True).stdout.strip()
-    central_arch = ssh_script(central, "uname -m\n", capture=True).stdout.strip()
-    if source_arch != central_arch:
-        raise RuntimeError("Архитектура CPU центральной и зарубежной VPS отличается; установите Xray на центральной VPS вручную")
+    target_arch = ssh_script(target, "uname -m\n", capture=True).stdout.strip()
+    if source_arch != target_arch:
+        raise RuntimeError("Архитектура CPU ноды egress и зарубежной VPS отличается; установите Xray на ноде бота вручную")
     source_binary = ssh_script(source, locate, capture=True).stdout.strip().splitlines()
     if not source_binary:
         raise RuntimeError("На VPN-ноде не найден Xray")
-    if source == "local" and central == "local":
+    if source == target:
         return source_binary[-1]
     with tempfile.TemporaryDirectory(prefix="home-vpn-xray-") as directory:
         local = pathlib.Path(directory) / "xray"
         run(["scp", f"{source}:{source_binary[-1]}", local])
-        push_file(central, local, "/usr/local/bin/home-vpn-xray", 0o755)
+        push_file(target, local, "/usr/local/bin/home-vpn-xray", 0o755)
     return "/usr/local/bin/home-vpn-xray"
 
 
@@ -867,12 +970,12 @@ def install_bot_egress(topology, inventories):
     for node in topology["nodes"]:
         outbounds.append(xhttp_outbound(node, ensure_bot_egress_link(node, inventories[node["id"]])))
     config = bot_egress_config(outbounds, topology.get("telegram_egress"))
-    central=topology["site"]["ssh_host"];binary=ensure_central_xray(topology)
+    target=bot_target(topology);binary=ensure_xray_on_target(topology,target)
     # Xray determines the config format from the final suffix.
     pending_config = "/etc/home-vpn/bot-egress.new.json"
-    push_json(central, pending_config, config, 0o600)
+    push_json(target, pending_config, config, 0o600)
     ownership={"clients":[{"email":"homevpn-bot-egress-"+node["id"],"panel_url":inventories[node["id"]]["panel_url"],"token_env":"XUI_TOKEN" if index==0 else node["id"].upper().replace("-","_")+"_XUI_TOKEN"} for index,node in enumerate(topology["nodes"])]}
-    push_json(central,"/etc/home-vpn/bot-egress-ownership.json",ownership,0o600)
+    push_json(target,"/etc/home-vpn/bot-egress-ownership.json",ownership,0o600)
     unit=f'''[Unit]
 Description=HOME-VPN balanced Telegram egress over VLESS XHTTP
 After=network-online.target
@@ -904,7 +1007,7 @@ UMask=0077
 WantedBy=multi-user.target
 '''
     encoded=base64.b64encode(unit.encode()).decode()
-    ssh_script(central, f'''set -Eeuo pipefail
+    ssh_script(target, f'''set -Eeuo pipefail
 getent group vpnshopbot >/dev/null || groupadd --system vpnshopbot
 getent passwd vpnshopbot >/dev/null || useradd --system --gid vpnshopbot --home-dir /var/lib/vpn-bot --shell /usr/sbin/nologin vpnshopbot
 getent group homevpn >/dev/null || groupadd --system homevpn
@@ -925,18 +1028,21 @@ systemctl enable --now home-vpn-bot-egress.service
 def install_bot(topology, credentials):
     site = topology["site"]
     secrets = site_secrets(site["ssh_host"])
+    target=bot_target(topology);remote=target!=site["ssh_host"]
+    selected=bot_node(topology)
+    tunnelled=remote and site["ssh_host"]=="local"
+    panel_bind="127.0.0.1" if tunnelled or not remote else selected["address"]
     answers = {
-        "public_url": site["public_url"], "shop_api_url": secrets["local_api"],
+        "public_url": site["public_url"], "shop_api_url": site["public_url"] if remote else secrets["local_api"],
         "shop_api_secret": secrets["api"], "telegram_token": credentials["telegram_token"],
         "telegram_admin_id": credentials["telegram_admin_id"],
         "telegram_channel": credentials["telegram_channel"],
         "admin_panel_url": site["public_url"] + secrets["admin_path"],
-        "bot_admin_url": site["public_url"], "bot_panel_bind": "127.0.0.1",
+        "bot_admin_url": site["public_url"], "bot_panel_bind": panel_bind,
         "bot_panel_port": "8090", "bot_panel_user": credentials["bot_panel_user"],
         "bot_panel_password": credentials["bot_panel_password"],
         "telegram_proxy_url": "http://127.0.0.1:" + str((topology.get("telegram_egress") or {}).get("port",18080)),
     }
-    target=site["ssh_host"]
     if remote_file_exists(target,"/etc/vpn-bot.env"):
         payload={
             "TELEGRAM_BOT_TOKEN":answers["telegram_token"],"TELEGRAM_ADMIN_ID":answers["telegram_admin_id"],
@@ -944,7 +1050,7 @@ def install_bot(topology, credentials):
             "PUBLIC_BASE_URL":answers["public_url"],"SHOP_API_SECRET":answers["shop_api_secret"],
             "ADMIN_PANEL_URL":answers["admin_panel_url"],"TELEGRAM_PROXY_URL":answers["telegram_proxy_url"],
         }
-        admin_payload={"BOT_PANEL_BIND":"127.0.0.1","BOT_PANEL_PORT":"8090","BOT_PANEL_USER":answers["bot_panel_user"],"BOT_PANEL_PASSWORD":answers["bot_panel_password"]}
+        admin_payload={"BOT_PANEL_BIND":panel_bind,"BOT_PANEL_PORT":"8090","BOT_PANEL_USER":answers["bot_panel_user"],"BOT_PANEL_PASSWORD":answers["bot_panel_password"]}
         update_remote_envs(target, {
             "/etc/vpn-bot.env": payload,
             "/etc/vpn-bot-admin.env": admin_payload,
@@ -964,11 +1070,54 @@ for line in pathlib.Path("/etc/vpn-bot-admin.env").read_text(encoding="utf-8").s
 print(json.dumps({"bind":values.get("BOT_PANEL_BIND"),"entry":values.get("BOT_PANEL_ENTRY_PATH","")}))
 '''
     details=json.loads(ssh_python(target,code,capture=True).stdout)
-    if details.get("bind") not in ("127.0.0.1","::1") or not str(details.get("entry") or "").startswith("/"):
-        raise RuntimeError("bot-admin должен слушать loopback и иметь закрытый URL path")
+    if details.get("bind")!=panel_bind or not str(details.get("entry") or "").startswith("/"):
+        raise RuntimeError("bot-admin слушает неожиданный адрес или не имеет закрытого URL path")
     public_bot_url=site["public_url"].rstrip("/")+details["entry"]
-    update_remote_envs(target,{"/etc/vpn-shop.env":{"BOT_ADMIN_URL":public_bot_url}})
-    ssh_script(target,"systemctl restart vpn-shop vpn-bot-admin\n")
+    upstream=install_bot_admin_tunnel(topology,target) if tunnelled else f"http://{panel_bind}:8090"
+    update_remote_envs(site["ssh_host"],{"/etc/vpn-shop.env":{"BOT_ADMIN_URL":public_bot_url,"BOT_ADMIN_UPSTREAM":upstream}})
+    ssh_script(target,"systemctl restart vpn-bot vpn-bot-admin\n")
+    ssh_script(site["ssh_host"],"systemctl restart vpn-shop\n")
+    return {"target":target,"public_url":public_bot_url,"user":answers["bot_panel_user"],"password":answers["bot_panel_password"]}
+
+
+def install_bot_admin_tunnel(topology,target):
+    """Expose a remote loopback bot-admin only to the local control VPS."""
+    if topology["site"]["ssh_host"]!="local":raise RuntimeError("SSH bot-admin tunnel поддерживается только при запуске на управляющей VPS")
+    port=int((topology.get("telegram_bot") or {}).get("admin_tunnel_port",18090))
+    if not 1024<=port<=65535:raise RuntimeError("telegram_bot.admin_tunnel_port должен быть от 1024 до 65535")
+    unit=f'''[Unit]
+Description=HOME-VPN secure tunnel to remote bot-admin
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+ExecStart=/usr/bin/ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -L 127.0.0.1:{port}:127.0.0.1:8090 {target}
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+[Install]
+WantedBy=multi-user.target
+'''
+    encoded=base64.b64encode(unit.encode()).decode()
+    ssh_script("local",f'''set -Eeuo pipefail
+printf '%s' {shlex.quote(encoded)} | base64 -d > /etc/systemd/system/home-vpn-bot-admin-tunnel.service
+chmod 0644 /etc/systemd/system/home-vpn-bot-admin-tunnel.service
+systemctl daemon-reload
+systemctl enable --now home-vpn-bot-admin-tunnel.service
+''')
+    return f"http://127.0.0.1:{port}"
+
+
+def remove_bot_admin_tunnel(topology):
+    if topology["site"]["ssh_host"]!="local":return
+    ssh_script("local",'''set -Eeuo pipefail
+systemctl disable --now home-vpn-bot-admin-tunnel.service 2>/dev/null || true
+rm -f -- /etc/systemd/system/home-vpn-bot-admin-tunnel.service
+systemctl daemon-reload
+''')
 
 
 def mode3_fallback_payload(inbound, destination=8080):
@@ -1266,6 +1415,22 @@ def bot_enabled(topology):
     return bool((topology.get("telegram_bot") or {}).get("enabled", True))
 
 
+def bot_node(topology):
+    placement=str((topology.get("telegram_bot") or {}).get("placement") or "control")
+    if placement=="control":return None
+    return next((node for node in topology.get("nodes") or [] if node.get("id")==placement),None)
+
+
+def bot_target(topology):
+    node=bot_node(topology)
+    return node["ssh_host"] if node else topology["site"]["ssh_host"]
+
+
+def bot_location_label(topology):
+    node=bot_node(topology)
+    return f"{node['name']} ({node['id']})" if node else "центральная VPS"
+
+
 def credentials_wizard(topology):
     admin_user=ask("Логин администратора сайта","home-admin")
     admin_password=ask_validated("Пароль администратора сайта","",lambda value:valid_password(value,"Пароль администратора"),True)
@@ -1279,8 +1444,8 @@ def credentials_wizard(topology):
     return {"admin_user":admin_user,"admin_password":admin_password,"telegram_token":telegram_token,"telegram_admin_id":telegram_admin_id,"telegram_channel":telegram_channel,"bot_panel_user":panel_user,"bot_panel_password":panel_password}
 
 
-def apply(topology):
-    check_servers(topology)
+def apply(topology,bootstrap_ssh=False):
+    check_servers(topology,bootstrap_ssh)
     credentials=credentials_wizard(topology)
     targets={topology["site"]["ssh_host"]}|{node["ssh_host"] for node in topology["nodes"]}
     with tempfile.TemporaryDirectory(prefix="home-vpn-topology-") as temporary:
@@ -1296,12 +1461,14 @@ def apply(topology):
     inventories={node["id"]:node_inventory(node,preserved_token) for node in topology["nodes"]}
     if preserved_token:
         for inventory in inventories.values():panel_api(inventory,"GET","/panel/api/inbounds/list")
+    ensure_site_tls(topology)
     install_site(topology,inventories,credentials)
     enforce_primary_site(topology)
     configure_mode3_public_route(topology,inventories)
+    bot_result=None
     if bot_enabled(topology):
         install_bot_egress(topology,inventories)
-        install_bot(topology,credentials)
+        bot_result=install_bot(topology,credentials)
     install_placeholders(topology)
     configure_cascade(topology,inventories)
     for node in topology["nodes"]:
@@ -1309,9 +1476,16 @@ def apply(topology):
         ssh_script(node["ssh_host"],"systemctl is-active --quiet "+services+"\n")
     ssh_script(topology["site"]["ssh_host"],"systemctl is-active --quiet vpn-shop\n")
     if bot_enabled(topology):
-        ssh_script(topology["site"]["ssh_host"],"systemctl is-active --quiet vpn-bot vpn-bot-admin home-vpn-bot-egress\n")
+        ssh_script(bot_target(topology),"systemctl is-active --quiet vpn-bot vpn-bot-admin home-vpn-bot-egress\n")
     smoke_public_route(topology)
     print("Установка и проверка ролей завершены")
+    print("Сайт:",topology["site"]["public_url"])
+    print("Telegram-бот:",bot_location_label(topology) if bot_enabled(topology) else "отключён")
+    if bot_result:
+        print("Панель Telegram-бота:",bot_result["public_url"])
+        print("Логин панели Telegram-бота:",bot_result["user"])
+        print("Пароль панели Telegram-бота:",bot_result["password"])
+    print("Сохраните показанные реквизиты в менеджере паролей и очистите scrollback терминала.")
 
 
 def update_managed(topology):
@@ -1322,14 +1496,16 @@ def update_managed(topology):
         archive=str(pathlib.Path(temporary)/"source.tar.gz");build_source_archive(archive)
         for target in sorted(targets):deploy_source(target,archive)
     central=topology["site"]["ssh_host"]
-    components=["site"]+(["bot"] if bot_enabled(topology) else [])
-    ssh_command(central,["python3","/opt/home-vpn-source/scripts/home-vpn-manager.py","update",*components])
+    ssh_command(central,["python3","/opt/home-vpn-source/scripts/home-vpn-manager.py","update","site"])
+    if bot_enabled(topology):
+        ssh_command(bot_target(topology),["python3","/opt/home-vpn-source/scripts/home-vpn-manager.py","update","bot"])
+        if bot_target(topology)!=central and central=="local":install_bot_admin_tunnel(topology,bot_target(topology))
     for node in topology["nodes"]:
         install_xui_backup(node["ssh_host"])
     for node in placeholder_nodes(topology):
         ssh_command(node["ssh_host"],["python3","/opt/home-vpn-source/scripts/home-vpn-manager.py","update","placeholder"])
     ssh_script(central,"systemctl is-active --quiet vpn-shop\n")
-    if bot_enabled(topology):ssh_script(central,"systemctl is-active --quiet vpn-bot vpn-bot-admin home-vpn-bot-egress\n")
+    if bot_enabled(topology):ssh_script(bot_target(topology),"systemctl is-active --quiet vpn-bot vpn-bot-admin home-vpn-bot-egress\n")
     for node in topology["nodes"]:ssh_script(node["ssh_host"],"systemctl is-active --quiet x-ui nginx home-vpn-kit-backup.timer\n")
     smoke_public_route(topology)
     print("Все управляемые роли HOME-VPN обновлены; базы, секреты и клиенты 3x-ui сохранены")
@@ -1346,10 +1522,16 @@ def remove_managed(topology,purge=False):
             input_text="DELETE HOME-VPN\n",
         )
     configure_cascade({**topology,"mode":1}, {})
-    components=["site"]+(["bot"] if bot_enabled(topology) else [])
+    remove_bot_admin_tunnel(topology)
+    if bot_enabled(topology):
+        ssh_command(
+            bot_target(topology),
+            ["python3","/opt/home-vpn-source/scripts/home-vpn-manager.py","remove","bot",*(["--purge-data"] if purge else [])],
+            input_text="DELETE HOME-VPN\n",
+        )
     ssh_command(
         central,
-        ["python3","/opt/home-vpn-source/scripts/home-vpn-manager.py","remove",*components,*(["--purge-data"] if purge else [])],
+        ["python3","/opt/home-vpn-source/scripts/home-vpn-manager.py","remove","site",*(["--purge-data"] if purge else [])],
         input_text="DELETE HOME-VPN\n",
     )
     print("HOME-VPN удалён со всех ролей; 3x-ui, inbounds, клиенты и её backup сохранены")
@@ -1367,6 +1549,7 @@ def parse_arguments():
     parser.add_argument("--purge-data",action="store_true",help="при удалении также удалить данные HOME-VPN")
     parser.add_argument("--confirm",default="")
     parser.add_argument("--interactive-confirm",action="store_true",help="запросить контрольную фразу после показа плана")
+    parser.add_argument("--bootstrap-ssh",action="store_true",help="однократно запросить пароль удалённых VPS через ssh-copy-id")
     return parser.parse_args()
 
 
@@ -1388,6 +1571,8 @@ def main():
         raise SystemExit("--purge-data допустим только вместе с --remove-managed")
     if arguments.interactive_confirm and not arguments.apply:
         raise SystemExit("--interactive-confirm допустим только вместе с --apply")
+    if arguments.bootstrap_ssh and not arguments.apply:
+        raise SystemExit("--bootstrap-ssh допустим только вместе с --apply")
     if arguments.config and (arguments.mode is not None or arguments.local_control_node):
         raise SystemExit("--mode и --local-control-node используются только с интерактивным мастером без --config")
     topology=json.loads(arguments.config.read_text(encoding="utf-8")) if arguments.config else wizard(arguments.mode,arguments.local_control_node)
@@ -1404,7 +1589,7 @@ def main():
     if arguments.apply and arguments.interactive_confirm:require_confirmation()
     if not arguments.apply or (arguments.confirm!=CONFIRMATION and not arguments.interactive_confirm):
         raise SystemExit("Dry-run: для установки добавьте --apply --confirm 'INSTALL HOME VPN TOPOLOGY'")
-    apply(topology)
+    apply(topology,arguments.bootstrap_ssh)
 
 
 if __name__=="__main__":main()

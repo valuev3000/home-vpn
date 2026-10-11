@@ -22,10 +22,10 @@ class SharedConfigurationTests(unittest.TestCase):
     def test_schema_rejects_public_bot_admin_and_remote_internal_api(self):
         admin = {key: "value" for key in CONFIG.ENV_SCHEMAS["bot_admin"]["required"]}
         admin.update({"BOT_PANEL_BIND": "0.0.0.0", "BOT_PANEL_PORT": "8090"})
-        self.assertTrue(any("loopback" in error for error in CONFIG.validate_env("bot_admin", admin)))
+        self.assertTrue(any("приватный" in error for error in CONFIG.validate_env("bot_admin", admin)))
         bot = {key: "value" for key in CONFIG.ENV_SCHEMAS["bot"]["required"]}
-        bot["SHOP_API_URL"] = "https://vpn.example.test"
-        self.assertTrue(any("loopback" in error for error in CONFIG.validate_env("bot", bot)))
+        bot["SHOP_API_URL"] = "http://vpn.example.test"
+        self.assertTrue(any("HTTPS" in error for error in CONFIG.validate_env("bot", bot)))
 
     def test_merge_preserves_existing_secret_on_empty_update(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -62,10 +62,15 @@ class SharedConfigurationTests(unittest.TestCase):
             path = pathlib.Path(directory) / "bot.env"
             path.write_text("ORIGINAL=value\n", encoding="utf-8")
             values = {key: "value" for key in CONFIG.ENV_SCHEMAS["bot"]["required"]}
-            values["SHOP_API_URL"] = "https://public.example"
-            with self.assertRaisesRegex(ValueError, "loopback"):
+            values["SHOP_API_URL"] = "http://public.example"
+            with self.assertRaisesRegex(ValueError, "HTTPS"):
                 CONFIG.merge_env(path, values, component="bot")
             self.assertEqual("ORIGINAL=value\n", path.read_text(encoding="utf-8"))
+
+    def test_remote_bot_accepts_https_site_and_private_panel_bind(self):
+        bot={key:"value" for key in CONFIG.ENV_SCHEMAS["bot"]["required"]};bot["SHOP_API_URL"]="https://vpn.example.com"
+        admin={key:"value" for key in CONFIG.ENV_SCHEMAS["bot_admin"]["required"]};admin.update({"BOT_PANEL_BIND":"10.10.0.11","BOT_PANEL_PORT":"8090"})
+        self.assertEqual([],CONFIG.validate_env("bot",bot));self.assertEqual([],CONFIG.validate_env("bot_admin",admin))
 
 
 if __name__ == "__main__":

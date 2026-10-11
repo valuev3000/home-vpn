@@ -37,6 +37,12 @@ def topology(mode=1, nodes=1):
 
 
 class TopologyValidationTests(unittest.TestCase):
+    def test_ssh_bootstrap_skips_password_when_key_already_works(self):
+        completed=__import__('subprocess').CompletedProcess([],0,stdout="0\n")
+        with mock.patch.object(MODULE,"run",return_value=completed) as runner:
+            MODULE.ensure_ssh_key_access("root@node.example.test")
+        self.assertEqual(1,runner.call_count);self.assertIn("BatchMode=yes",runner.call_args.args[0])
+
     def test_interactive_confirmation_repeats_until_exact_phrase(self):
         answers=iter(("wrong",MODULE.CONFIRMATION));original=getattr(MODULE,"input",None)
         MODULE.input=lambda _prompt:next(answers)
@@ -56,6 +62,17 @@ class TopologyValidationTests(unittest.TestCase):
         self.assertEqual("local",plan["site"]["ssh_host"])
         self.assertEqual("root@foreign.example.test",plan["nodes"][0]["ssh_host"])
         self.assertEqual(1,plan["mode"])
+
+    def test_wizard_selects_foreign_vps_for_bot(self):
+        answers=iter((
+            MODULE.DEFAULT_KIT_URL,MODULE.DEFAULT_KIT_SHA256,"10.10.0.10","1",
+            "PL","pl-1","Poland","root@198.51.100.20","198.51.100.20","10.10.0.10","10.10.0.10",
+            "dl.google.com","","1","https://vpn.example.test","","y","1",
+        ))
+        with mock.patch.object(MODULE,"ask",side_effect=lambda *_args,**_kwargs:next(answers)):
+            plan=MODULE.wizard(2,local_control_node=True)
+        self.assertEqual("pl-1",plan["telegram_bot"]["placement"])
+        self.assertEqual("pl-1",plan["emergency_node"])
 
     def test_integer_question_repeats_until_value_is_in_range(self):
         answers=iter(("4","2"));original=MODULE.ask
@@ -139,6 +156,22 @@ class TopologyValidationTests(unittest.TestCase):
         MODULE.validate_topology(value)
         self.assertFalse(MODULE.bot_enabled(value))
 
+    def test_telegram_bot_can_run_on_selected_foreign_node(self):
+        value=topology(2);value["telegram_bot"]={"enabled":True,"placement":"foreign-1"}
+        MODULE.validate_topology(value)
+        self.assertEqual("root@node-1.example.test",MODULE.bot_target(value))
+        self.assertIn("foreign-1",MODULE.bot_location_label(value))
+
+    def test_remote_bot_rejects_unknown_node_and_public_admin_bind(self):
+        value=topology(1);value["telegram_bot"]={"enabled":True,"placement":"missing"}
+        with self.assertRaisesRegex(SystemExit,"placement"):MODULE.validate_topology(value)
+        value=topology(1);value["telegram_bot"]={"enabled":True,"placement":"foreign-1"};value["nodes"][0]["address"]="8.8.8.8"
+        with self.assertRaisesRegex(SystemExit,"приватным"):MODULE.validate_topology(value)
+
+    def test_local_control_can_tunnel_bot_admin_to_public_foreign_vps(self):
+        value=topology(2);value["site"]["ssh_host"]="local";value["nodes"][0]["address"]="203.0.113.11";value["telegram_bot"]={"enabled":True,"placement":"foreign-1"}
+        MODULE.validate_topology(value)
+
     def test_credentials_repeat_invalid_secret_values(self):
         answers=iter((
             "home-admin","short","AdminPassword123",
@@ -155,6 +188,57 @@ class TopologyValidationTests(unittest.TestCase):
 
 
 class GeneratedConfigurationTests(unittest.TestCase):
+    def test_fresh_control_site_gets_automatic_letsencrypt_certificate(self):
+        value=topology(1);value["site"]["ssh_host"]="local"
+        calls=[]
+        with mock.patch.object(MODULE,"ssh_command",side_effect=lambda target,args,**kwargs:calls.append((target,args,kwargs))):
+            MODULE.ensure_site_tls(value)
+        self.assertEqual("/etc/letsencrypt/live/vpn.example.test/fullchain.pem",value["site"]["tls_cert"])
+        self.assertEqual("/etc/letsencrypt/live/vpn.example.test/privkey.pem",value["site"]["tls_key"])
+        self.assertEqual("local",calls[0][0])
+        self.assertEqual(["bash","-s","--","vpn.example.test"],calls[0][1])
+        self.assertIn("--register-unsafely-without-email",calls[0][2]["input_text"])
+        self.assertIn("certbot.timer",calls[0][2]["input_text"])
+
+    def test_automatic_letsencrypt_rejects_ip_address(self):
+        value=topology(1);value["site"]["public_url"]="https://203.0.113.10"
+        with self.assertRaisesRegex(RuntimeError,"домен"):
+            MODULE.ensure_site_tls(value)
+
+    def test_existing_site_certificate_skips_certbot(self):
+        value=topology(1);value["site"].update({"tls_cert":"/etc/site.crt","tls_key":"/etc/site.key"})
+        with mock.patch.object(MODULE,"ssh_command") as command:
+            MODULE.ensure_site_tls(value)
+        command.assert_not_called()
+
+    def test_remote_bot_uses_https_site_api_and_private_panel_upstream(self):
+        value=topology(2);value["telegram_bot"]={"enabled":True,"placement":"foreign-1"}
+        credentials={"telegram_token":"123456789:"+("A"*35),"telegram_admin_id":"123456789","telegram_channel":"","bot_panel_user":"bot-admin","bot_panel_password":"StrongPassword123"}
+        pushed=[];updated=[];scripts=[]
+        details=type("Result",(),{"stdout":'{"bind":"10.10.0.11","entry":"/bot-secret"}'})()
+        with mock.patch.object(MODULE,"site_secrets",return_value={"local_api":"http://127.0.0.1:8080","api":"secret","admin_path":"/admin"}), \
+             mock.patch.object(MODULE,"remote_file_exists",return_value=False), \
+             mock.patch.object(MODULE,"push_json",side_effect=lambda *args,**kwargs:pushed.append(args)), \
+             mock.patch.object(MODULE,"ssh_script",side_effect=lambda *args,**kwargs:scripts.append(args)), \
+             mock.patch.object(MODULE,"ssh_python",return_value=details), \
+             mock.patch.object(MODULE,"update_remote_envs",side_effect=lambda *args,**kwargs:updated.append(args)):
+            MODULE.install_bot(value,credentials)
+        answers=next(payload for target,path,payload,*_rest in pushed if path.endswith("home-vpn-bot-answers.json"))
+        self.assertEqual("https://vpn.example.test",answers["shop_api_url"])
+        self.assertEqual("10.10.0.11",answers["bot_panel_bind"])
+        site_update=next(changes for target,changes in updated if target=="root@central.example.test")
+        self.assertEqual("http://10.10.0.11:8090",site_update["/etc/vpn-shop.env"]["BOT_ADMIN_UPSTREAM"])
+
+    def test_local_control_uses_ssh_tunnel_for_remote_bot_admin(self):
+        value=topology(2);value["site"]["ssh_host"]="local";value["telegram_bot"]={"enabled":True,"placement":"foreign-1"}
+        commands=[]
+        with mock.patch.object(MODULE,"ssh_script",side_effect=lambda target,script,**kwargs:commands.append((target,script))):
+            upstream=MODULE.install_bot_admin_tunnel(value,"root@node-1.example.test")
+        self.assertEqual("http://127.0.0.1:18090",upstream)
+        encoded=commands[0][1].split("printf '%s' ",1)[1].split(" |",1)[0].strip("'")
+        unit=__import__('base64').b64decode(encoded).decode()
+        self.assertIn("127.0.0.1:18090:127.0.0.1:8090",unit)
+        self.assertIn("root@node-1.example.test",unit)
     def test_role_update_covers_control_node_edges_and_backup_units(self):
         value=topology(1);commands=[];deployed=[];backups=[]
         with mock.patch.object(MODULE,"check_servers"), \

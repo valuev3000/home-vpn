@@ -14,7 +14,7 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y ca-certificates git python3
+apt-get install -y ca-certificates git openssh-client python3
 temporary_dir="$(mktemp -d /tmp/home-vpn-installer.XXXXXX)"
 cleanup() { rm -rf -- "$temporary_dir"; }
 trap cleanup EXIT INT TERM

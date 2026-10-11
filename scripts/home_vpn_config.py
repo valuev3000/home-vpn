@@ -8,6 +8,7 @@ services and validation tests import it as the single source of truth.
 from __future__ import annotations
 
 import json
+import ipaddress
 import os
 import pathlib
 import re
@@ -68,7 +69,7 @@ ENV_SCHEMAS = {
         },
         "optional": {
             "ASSET_ROOT", "DOWNLOAD_ROOT", "TLS_CERT", "TLS_KEY",
-            "TELEGRAM_ADMIN_ID", "TELEGRAM_BOT_URL", "BOT_ADMIN_URL",
+            "TELEGRAM_ADMIN_ID", "TELEGRAM_BOT_URL", "BOT_ADMIN_URL", "BOT_ADMIN_UPSTREAM",
             "SMTP_HOST", "SMTP_PORT", "SMTP_USERNAME", "SMTP_PASSWORD",
             "SMTP_STARTTLS", "SMTP_SSL", "IMAP_HOST", "IMAP_PORT",
             "IMAP_USERNAME", "IMAP_PASSWORD", "IMAP_SSL", "MAIL_FROM",
@@ -216,12 +217,16 @@ def validate_env(component: str, values: dict[str, str], *, strict_unknown: bool
     for key in ("APP_PORT", "SMTP_PORT", "IMAP_PORT", "MTPROTO_PUBLIC_PORT", "BOT_PANEL_PORT") & values.keys():
         if values[key] and (not values[key].isdigit() or not 0 <= int(values[key]) <= 65535):
             errors.append(f"{key}: ожидается порт 0..65535")
-    if component == "bot_admin" and values.get("BOT_PANEL_BIND") not in ("127.0.0.1", "::1"):
-        errors.append("BOT_PANEL_BIND: панель должна слушать loopback")
+    if component == "bot_admin" and values.get("BOT_PANEL_BIND"):
+        try:panel_address=ipaddress.ip_address(values["BOT_PANEL_BIND"])
+        except ValueError:errors.append("BOT_PANEL_BIND: ожидается IP-адрес")
+        else:
+            private=panel_address.is_private and not panel_address.is_unspecified and not panel_address.is_link_local
+            if not (panel_address.is_loopback or private):errors.append("BOT_PANEL_BIND: нужен loopback или приватный адрес защищённой сети")
     if component == "bot" and values.get("SHOP_API_URL"):
-        host = urlparse(values["SHOP_API_URL"]).hostname
-        if host not in ("127.0.0.1", "::1", "localhost"):
-            errors.append("SHOP_API_URL: внутренний API бота должен использовать loopback")
+        parsed=urlparse(values["SHOP_API_URL"]);host=parsed.hostname
+        if host not in ("127.0.0.1", "::1", "localhost") and parsed.scheme!="https":
+            errors.append("SHOP_API_URL: удалённый API должен использовать HTTPS")
     return errors
 
 

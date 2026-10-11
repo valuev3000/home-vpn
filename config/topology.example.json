@@ -5,7 +5,8 @@
     "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
   },
   "telegram_bot": {
-    "enabled": true
+    "enabled": true,
+    "placement": "foreign-1"
   },
   "telegram_egress": {
     "listen": "127.0.0.1",
