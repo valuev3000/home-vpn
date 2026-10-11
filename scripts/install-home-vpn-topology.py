@@ -1236,7 +1236,10 @@ def xhttp_outbound(node, link):
         stream["tlsSettings"] = {"serverName": query.get("sni", node["public_host"]), "allowInsecure": False, "fingerprint": query.get("fp", "chrome")}
     user = {"id": urllib.parse.unquote(parsed.username), "encryption": query.get("encryption", "none")}
     if query.get("flow"):user["flow"] = query["flow"]
-    return {"tag": "foreign-" + safe_id(node["id"]), "protocol": "vless", "settings": {"vnext": [{"address": parsed.hostname, "port": parsed.port, "users": [user]}]}, "streamSettings": stream}
+    # A clustered 3x-ui control plane may render links with the controller's
+    # address. The topology's reviewed public_host is authoritative for the
+    # actual node and prevents egress from looping back through VPS-1.
+    return {"tag": "foreign-" + safe_id(node["id"]), "protocol": "vless", "settings": {"vnext": [{"address": node["public_host"], "port": parsed.port, "users": [user]}]}, "streamSettings": stream}
 
 
 def bot_egress_config(outbounds, egress=None):
@@ -1716,6 +1719,7 @@ def install_placeholders(topology):
     url = topology["site"]["public_url"]
     for node in placeholder_nodes(topology):
         environment = " ".join((
+            "HOME_VPN_SOURCE_ROOT=/opt/home-vpn-source",
             "HOME_VPN_PLACEHOLDER_TITLE=" + shlex.quote(title),
             "HOME_VPN_PLACEHOLDER_URL=" + shlex.quote(url),
             "HOME_VPN_PLACEHOLDER_PORT=8181",

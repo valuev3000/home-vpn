@@ -80,7 +80,7 @@ systemctl is-active --quiet vpn-bot vpn-bot-admin home-vpn-bot-egress
 ss -lntH | grep -Fq __BOT_PANEL_LISTEN__
 ! ss -lntH | grep -Eq '0\.0\.0\.0:8090|\[::\]:8090'
 python3 - <<'PY'
-import base64,json,pathlib,urllib.error,urllib.request
+import http.cookiejar,json,pathlib,urllib.error,urllib.parse,urllib.request
 cfg=json.loads(pathlib.Path('/etc/home-vpn/bot-egress.json').read_text())
 assert cfg['inbounds'][0]['listen'] in ('127.0.0.1','::1')
 assert cfg['routing']['balancers'][0]['fallbackTag']=='blocked'
@@ -97,12 +97,14 @@ for line in pathlib.Path('/etc/vpn-bot-admin.env').read_text().splitlines():
  if line and not line.lstrip().startswith('#') and '=' in line:
   key,value=line.split('=',1);admin[key]=value.strip().strip("'\"")
 url=values['PUBLIC_BASE_URL'].rstrip('/')+admin['BOT_PANEL_ENTRY_PATH']
-def status(user,password):
- token=base64.b64encode((user+':'+password).encode()).decode()
- try:return urllib.request.urlopen(urllib.request.Request(url,headers={'Authorization':'Basic '+token}),timeout=20).status
+def login(opener,user,password):
+ body=urllib.parse.urlencode({'username':user,'password':password}).encode()
+ try:return opener.open(urllib.request.Request(url,data=body,method='POST'),timeout=20).status
  except urllib.error.HTTPError as error:return error.code
-assert status(admin['BOT_PANEL_USER'],'definitely-wrong')==401
-assert status(admin['BOT_PANEL_USER'],admin['BOT_PANEL_PASSWORD'])==200
+assert login(urllib.request.build_opener(),admin['BOT_PANEL_USER'],'definitely-wrong')==401
+cookies=http.cookiejar.CookieJar();opener=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookies))
+assert login(opener,admin['BOT_PANEL_USER'],admin['BOT_PANEL_PASSWORD'])==200
+assert any(cookie.name=='bot_panel' and cookie.value for cookie in cookies)
 PY
 curl -x http://127.0.0.1:__EGRESS_PORT__ -fsS --max-time 20 https://api.telegram.org/ >/dev/null
 '''.replace("__BOT_PANEL_LISTEN__",shlex.quote(("["+panel_bind+"]" if ":" in panel_bind else panel_bind)+":8090")).replace("__EGRESS_PORT__",str(int((topology.get("telegram_egress") or {}).get("port",18080))))

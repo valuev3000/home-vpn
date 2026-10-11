@@ -351,6 +351,7 @@ class GeneratedConfigurationTests(unittest.TestCase):
         self.assertEqual("reality", outbound["streamSettings"]["security"])
         self.assertEqual("/hidden", outbound["streamSettings"]["xhttpSettings"]["path"])
         self.assertEqual("public-key", outbound["streamSettings"]["realitySettings"]["publicKey"])
+        self.assertEqual(node["public_host"], outbound["settings"]["vnext"][0]["address"])
 
     def test_bot_egress_is_balanced_and_telegram_only(self):
         outbounds = [
