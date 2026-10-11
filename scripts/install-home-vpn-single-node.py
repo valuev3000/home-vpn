@@ -27,9 +27,8 @@ APPLY_CONFIRMATION = "INSTALL HOME VPN"
 PREPARE_SERVER = r'''set -Eeuo pipefail
 site_domain=$1
 panel_domain=$2
-cert_email=$3
-ssh_port=$4
-xui_mode=$5
+ssh_port=$3
+xui_mode=$4
 export DEBIAN_FRONTEND=noninteractive
 
 . /etc/os-release
@@ -90,7 +89,7 @@ if [ "$certificate_ok" != true ]; then
     }
     trap restore_nginx EXIT
     certbot certonly --standalone --non-interactive --agree-tos --no-eff-email --expand \
-        --cert-name "$site_domain" --email "$cert_email" \
+        --cert-name "$site_domain" --register-unsafely-without-email \
         -d "$site_domain" -d "$panel_domain"
     restore_nginx
     trap - EXIT
@@ -190,13 +189,6 @@ def validate_domain(value, label):
         value,
     ):
         raise SystemExit(f"{label}: нужно полное DNS-имя, получено {value!r}")
-    return value
-
-
-def validate_email(value):
-    value = str(value or "").strip()
-    if not re.fullmatch(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}", value):
-        raise SystemExit("Email для Let's Encrypt указан неверно")
     return value
 
 
@@ -474,7 +466,6 @@ def collect_answers(site_domain_override="", panel_domain_override=""):
     public_ip = detect_public_ipv4(site_domain, panel_domain)
     ssh_port = detected_ssh_port()
     print(f"Определено автоматически: IPv4 {public_ip}, SSH-порт {ssh_port}")
-    cert_email = validate_email(ask("Email для Let's Encrypt"))
     country = ask_country()
     node_name = ask("Название VPN-ноды", "Main VPN node")
     sni = validate_domain(ask("SNI маскировки", "dl.google.com"), "SNI")
@@ -486,7 +477,7 @@ def collect_answers(site_domain_override="", panel_domain_override=""):
     return {
         "public_ip": public_ip, "ssh_port": ssh_port,"xui_install_mode":xui_install_mode,
         "site_domain": site_domain, "panel_domain": panel_domain,
-        "cert_email": cert_email, "country": country, "node_name": node_name,
+        "country": country, "node_name": node_name,
         "sni": sni, "bot_enabled": bot_enabled,
         "installer_url": installer_url,
         "installer_sha256": installer_sha256,
@@ -766,7 +757,7 @@ def main():
 
     run(
         ["bash", "-s", "--", answers["site_domain"], answers["panel_domain"],
-         answers["cert_email"], answers["ssh_port"],answers["xui_install_mode"]],
+         answers["ssh_port"], answers["xui_install_mode"]],
         input_text=PREPARE_SERVER, timeout=1800,
     )
     run([

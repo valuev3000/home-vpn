@@ -25,7 +25,6 @@ HOME-VPN. Обновление не меняет базы, секреты и 3x-
 Как и установщик `3x-ui-pro`, мастер выполняется непосредственно на VPS. Он
 интерактивно запросит:
 
-- email Let's Encrypt;
 - код страны из 2–3 латинских букв (`EE` или `EST`), имя ноды и SNI;
 - нужна ли установка Telegram-бота;
 - URL и SHA-256 зафиксированного установщика KIT;
@@ -155,7 +154,7 @@ ufw status verbose
 ```bash
 certbot certonly --standalone \
   --agree-tos --no-eff-email \
-  --email admin@example.com \
+  --register-unsafely-without-email \
   -d vpn.example.com \
   -d panel.example.com
 ```

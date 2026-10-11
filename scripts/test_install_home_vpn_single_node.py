@@ -13,6 +13,12 @@ SPEC.loader.exec_module(MODULE)
 
 
 class ValidationTests(unittest.TestCase):
+    def test_lets_encrypt_does_not_request_email(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertNotIn('ask("Email для Let\'s Encrypt")', source)
+        self.assertNotIn("cert_email", source)
+        self.assertIn("--register-unsafely-without-email", MODULE.PREPARE_SERVER)
+
     def test_country_accepts_iso_alpha2_and_alpha3(self):
         self.assertEqual("EE", MODULE.validate_country("ee"))
         self.assertEqual("EST", MODULE.validate_country("est"))
