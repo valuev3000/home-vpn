@@ -251,6 +251,20 @@ class GeneratedConfigurationTests(unittest.TestCase):
         self.assertIn("proxy_pass http://127.0.0.1:8080;", config)
         self.assertIn("listen 127.0.0.1:10446 ssl http2 proxy_protocol;", config)
 
+    def test_kit_route_replaces_only_the_main_catch_all(self):
+        calls=[];original=MODULE.ssh_command
+        MODULE.ssh_command=lambda target,args,**kwargs:calls.append((target,args,kwargs))
+        try:MODULE.configure_kit_nginx_route(topology(3))
+        finally:MODULE.ssh_command=original
+        self.assertEqual("local" if topology(3)["site"]["ssh_host"]=="local" else "root@node-1.example.test",calls[0][0])
+        self.assertIn("proxy_pass http://127.0.0.1:8080",calls[0][2]["input_text"])
+        self.assertIn("pattern.search(text)",calls[0][1][2])
+
+    def test_local_sni_uses_kit_domain_flag_without_shared_certificate(self):
+        source=SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('flags.extend(("--domain",node["sni"]))',source)
+        self.assertIn('node.get("sni_mode")!="local"',source)
+
     def test_tls_path_cannot_inject_nginx_directives(self):
         value = topology()
         value["site"].update({"tls_cert": "/tmp/cert.pem;return 200", "tls_key": "/tmp/key.pem"})

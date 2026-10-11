@@ -321,6 +321,10 @@ def validate_topology(topology):
                 raise SystemExit(f"topology.nodes[{index - 1}].{key} обязателен")
         valid_ip(node["address"], f"Адрес ноды {index}")
         valid_country(node["country"], f"Код страны ноды {index}")
+        sni_mode=node.get("sni_mode","external")
+        if sni_mode not in ("external","local","preserve"):
+            raise SystemExit(f"Нода {index}: sni_mode должен быть external, local или preserve")
+        valid_host(node["sni"],f"SNI ноды {index}",True)
         api_host = str(node.get("api_host") or "")
         if api_host and not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?", api_host):
             raise SystemExit(f"api_host ноды {index}: нужно DNS-имя без схемы и пути")
@@ -366,6 +370,9 @@ def show_plan(topology):
         suffix = f" · вход на центральной VPS {node['ingress_address']}" if topology["mode"] == 2 else ""
         roles = " · аварийный MTProto" if node["id"] == topology["emergency_node"] else ""
         print(f"VPN: {node['id']} · {node['ssh_host']} · {node['address']} · 11 подключений{suffix}{roles}")
+        masking="локальный сайт-заглушка" if node.get("sni_mode")=="local" else "внешний TLS-сайт"
+        if node.get("sni_mode")=="preserve":masking="сохранение существующей настройки"
+        print(f"  SNI: {node['sni']} · {masking}")
     print("Заглушка: " + ("на каждой зарубежной ноде" if topology["mode"] in (1, 2) else "не требуется"))
     print("Telegram-бот: " + ("центральная VPS" if bot_enabled(topology) else "отключён"))
 
@@ -469,12 +476,11 @@ def install_kit(node, installer):
         raise RuntimeError(f"{node['id']}: обнаружена частичная/другая конфигурация 3x-ui; автоматическая очистка запрещена")
     else:
         push_file(target, installer, "/root/3x-ui-protocol-installer.sh", 0o700)
-        flags = [
-            "bash", "/root/3x-ui-protocol-installer.sh", "--host", node["public_host"],
-            "--sni", node["sni"], "--protocols", "all", "--user", "homevpn-bootstrap",
-            "--no-ufw", "-y",
-        ]
-        if node.get("cert") and node.get("key"):
+        flags = ["bash","/root/3x-ui-protocol-installer.sh","--host",node["public_host"]]
+        if node.get("sni_mode")=="local":flags.extend(("--domain",node["sni"]))
+        else:flags.extend(("--sni",node["sni"]))
+        flags.extend(("--protocols","all","--user","homevpn-bootstrap","--no-ufw","-y"))
+        if node.get("sni_mode")!="local" and node.get("cert") and node.get("key"):
             flags.extend(("--cert", node["cert"], "--key", node["key"]))
         command = " ".join(shlex.quote(item) for item in flags)
         ssh_script(target, f'''set -Eeuo pipefail
@@ -485,7 +491,29 @@ systemctl daemon-reload
 systemctl restart x-ui kit-sub
 /usr/local/bin/kit user del homevpn-bootstrap >/dev/null 2>&1 || true
 ''', timeout=960)
+    configure_kit_public_certificate(node)
     install_xui_backup(target)
+
+
+def configure_kit_public_certificate(node):
+    """Keep the self-steal certificate, but serve site/panel with our SAN cert."""
+    if not node.get("cert") or not node.get("key"):return
+    code=r'''import os,pathlib,re,subprocess,sys,tempfile
+path=pathlib.Path("/etc/nginx/conf.d/kit.conf")
+if not path.is_file():raise SystemExit
+cert,key=sys.argv[1:3];text=path.read_text(encoding="utf-8");marker="# Свой домен (self-steal)"
+head,separator,tail=text.partition(marker)
+head=re.sub(r"(?m)^\s*ssl_certificate\s+[^;]+;",f"    ssl_certificate {cert};",head,count=1)
+head=re.sub(r"(?m)^\s*ssl_certificate_key\s+[^;]+;",f"    ssl_certificate_key {key};",head,count=1)
+updated=head+(separator+tail if separator else "")
+fd,tmp=tempfile.mkstemp(prefix=path.name+".",dir=path.parent,text=True)
+with os.fdopen(fd,"w",encoding="utf-8") as output:output.write(updated)
+os.chmod(tmp,0o644);os.replace(tmp,path)
+result=subprocess.run(["nginx","-t"],text=True,capture_output=True)
+if result.returncode:raise SystemExit(result.stderr or result.stdout)
+subprocess.run(["systemctl","reload","nginx"],check=True)
+'''
+    ssh_command(node["ssh_host"],["python3","-c",code,node["cert"],node["key"]])
 
 
 def install_xui_backup(target):
@@ -971,6 +999,44 @@ def mode3_nginx_config(site):
 '''
 
 
+def configure_kit_nginx_route(topology):
+    target=topology["site"]["ssh_host"]
+    snippet='''location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $proxy_protocol_addr;
+        proxy_set_header X-Forwarded-For $proxy_protocol_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+    }'''
+    code=r'''import os,pathlib,re,shutil,subprocess,sys,tempfile
+path=pathlib.Path("/etc/nginx/conf.d/kit.conf");replacement=sys.stdin.read().rstrip()
+text=path.read_text(encoding="utf-8");original=text
+pattern=re.compile(r"\blocation\s+/\s*\{");match=pattern.search(text)
+if not match:raise SystemExit("В основном KIT-vhost не найден location /")
+opening=text.find("{",match.start(),match.end());depth=0;end=None
+for index in range(opening,len(text)):
+    if text[index]=="{":depth+=1
+    elif text[index]=="}":
+        depth-=1
+        if depth==0:end=index+1;break
+if end is None:raise SystemExit("Незакрытый location / в KIT-vhost")
+text=text[:match.start()]+replacement+text[end:]
+backup=path.with_name(path.name+".pre-home-vpn")
+if not backup.exists():shutil.copy2(path,backup);os.chmod(backup,0o600)
+fd,tmp=tempfile.mkstemp(prefix=path.name+".",dir=path.parent,text=True)
+with os.fdopen(fd,"w",encoding="utf-8") as output:output.write(text)
+os.chmod(tmp,0o644);os.replace(tmp,path)
+check=subprocess.run(["nginx","-t"],text=True,capture_output=True)
+if check.returncode:
+ path.write_text(original,encoding="utf-8");os.chmod(path,0o644)
+ raise SystemExit(check.stderr or check.stdout)
+subprocess.run(["systemctl","reload","nginx"],check=True)
+'''
+    ssh_command(target,["python3","-c",code],input_text=snippet)
+
+
 def configure_preserved_nginx_route(topology):
     site=topology["site"];parsed=valid_public_url(site["public_url"]);target=site["ssh_host"]
     snippet='''location / {
@@ -1052,18 +1118,7 @@ def configure_mode3_public_route(topology, inventories):
         configure_preserved_nginx_route(topology);return
     target=topology["site"]["ssh_host"]
     if remote_file_exists(target,"/etc/nginx/kit-stream.conf"):
-        site=topology["site"]
-        if not site.get("tls_cert") or not site.get("tls_key"):
-            raise RuntimeError("mode 3 с nginx KIT требует TLS-сертификат сайта")
-        config=mode3_nginx_config(site)
-        encoded=base64.b64encode(config.encode()).decode()
-        ssh_script(target,f'''set -Eeuo pipefail
-rm -f -- /etc/nginx/conf.d/home-vpn-mode3.conf
-printf '%s' {shlex.quote(encoded)} | base64 -d > /etc/nginx/conf.d/zz-home-vpn-mode3.conf
-chmod 0644 /etc/nginx/conf.d/zz-home-vpn-mode3.conf
-nginx -t
-systemctl reload nginx
-''')
+        configure_kit_nginx_route(topology)
         return
     node=topology["nodes"][0];inventory=inventories[node["id"]]
     result=panel_api(inventory,"GET","/panel/api/inbounds/list")

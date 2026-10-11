@@ -412,6 +412,23 @@ def detect_existing_domains(database=pathlib.Path("/etc/x-ui/x-ui.db"),
     return site_candidates[0], panel_domain
 
 
+def detect_existing_reality_sni(database=pathlib.Path("/etc/x-ui/x-ui.db")):
+    if not database.is_file():return ""
+    connection=sqlite3.connect("file:"+str(database)+"?mode=ro",uri=True)
+    try:rows=connection.execute("SELECT stream_settings FROM inbounds WHERE enable=1").fetchall()
+    finally:connection.close()
+    for (raw,) in rows:
+        try:
+            settings=json.loads(raw or "{}")
+            reality=settings.get("realitySettings") or {}
+            names=reality.get("serverNames") or []
+            if settings.get("security")=="reality" and names:
+                return validate_domain(str(names[0]),"SNI существующей 3x-ui")
+        except (json.JSONDecodeError,SystemExit,TypeError):
+            continue
+    return ""
+
+
 def find_preserved_vhost(domain, nginx_root=pathlib.Path("/etc/nginx")):
     candidates = (
         nginx_root / "sites-enabled" / domain,
@@ -485,7 +502,7 @@ def preserve_preflight(site_domain, bot_enabled, nginx_root=pathlib.Path("/etc/n
 
 def build_topology(*, public_ip, site_domain, panel_domain, country, node_name,
                    sni, bot_enabled, installer_url, installer_sha256,
-                   xui_install_mode="fresh", **_ignored):
+                   xui_install_mode="fresh", sni_mode="external", **_ignored):
     cert_dir = f"/etc/letsencrypt/live/{site_domain}"
     return {
         "mode": 3,
@@ -509,7 +526,7 @@ def build_topology(*, public_ip, site_domain, panel_domain, country, node_name,
             "id": "foreign-1", "name": node_name, "country": country,
             "flag": "🌐", "ssh_host": "local", "address": public_ip,
             "api_host": panel_domain, "public_host": panel_domain,
-            "ingress_address": "", "sni": sni,
+            "ingress_address": "", "sni": sni, "sni_mode": sni_mode,
             "cert": cert_dir + "/fullchain.pem",
             "key": cert_dir + "/privkey.pem",
         }],
@@ -567,7 +584,28 @@ def collect_answers(site_domain_override="", panel_domain_override=""):
     print(f"Определено автоматически: IPv4 {public_ip}, SSH-порт {ssh_port}")
     country = ask_country()
     node_name = ask("Название VPN-ноды", "Main VPN node")
-    sni = ask_validated("SNI маскировки", "dl.google.com", lambda value:validate_domain(value,"SNI"))
+    if xui_install_mode=="preserve":
+        sni_mode="preserve";sni=detect_existing_reality_sni() or "dl.google.com"
+        print(f"SNI существующей 3x-ui будет сохранён без изменений: {sni}")
+    else:
+        print("\nМаскировка REALITY:")
+        print("  1 — третий домен на этой VPS и локальный сайт-заглушка (рекомендуется)")
+        print("  2 — внешний TLS-сайт, как раньше")
+        while True:
+            masking=ask("Выберите вариант SNI","1")
+            if masking in ("1","2"):break
+            print("Допустимы варианты 1 или 2")
+        sni_mode="local" if masking=="1" else "external"
+        if sni_mode=="local":
+            while True:
+                sni=ask_validated("Третий домен для SNI и сайта-заглушки","",lambda value:validate_domain(value,"SNI-домен"))
+                if sni in (site_domain,panel_domain):
+                    print("SNI-домен должен отличаться от доменов сайта и панели")
+                    continue
+                try:check_dns(sni,public_ip);break
+                except SystemExit as error:print(error)
+        else:
+            sni=ask_validated("Внешний SNI маскировки","dl.google.com",lambda value:validate_domain(value,"SNI"))
     bot_enabled = ask_yes_no("Установить Telegram-бота?", True)
     installer_url = ask_validated("HTTPS URL установщика 3x-ui/KIT",DEFAULT_KIT_URL,validate_https_url) if xui_install_mode=="fresh" else DEFAULT_KIT_URL
     installer_sha256 = ask_validated("SHA-256 установщика",DEFAULT_KIT_SHA256,validate_sha256) if xui_install_mode=="fresh" else DEFAULT_KIT_SHA256
@@ -575,7 +613,7 @@ def collect_answers(site_domain_override="", panel_domain_override=""):
         "public_ip": public_ip, "ssh_port": ssh_port,"xui_install_mode":xui_install_mode,
         "site_domain": site_domain, "panel_domain": panel_domain,
         "country": country, "node_name": node_name,
-        "sni": sni, "bot_enabled": bot_enabled,
+        "sni": sni, "sni_mode": sni_mode, "bot_enabled": bot_enabled,
         "installer_url": installer_url,
         "installer_sha256": installer_sha256,
     }
@@ -979,6 +1017,15 @@ def restore_preserved_nginx_route():
     snippet = pathlib.Path("/etc/nginx/snippets/home-vpn-site.conf")
     referenced = any(marker in item.read_text(encoding="utf-8", errors="ignore") for item in pathlib.Path("/etc/nginx").glob("sites-available/*") if item.is_file())
     if not referenced:snippet.unlink(missing_ok=True)
+    kit=pathlib.Path("/etc/nginx/conf.d/kit.conf")
+    kit_backup=kit.with_name(kit.name+".pre-home-vpn")
+    if kit.is_file() and kit_backup.is_file():
+        current=kit.read_bytes();kit.write_bytes(kit_backup.read_bytes());kit.chmod(0o644)
+        result=run(["nginx","-t"],capture=True,check=False)
+        if result.returncode:
+            kit.write_bytes(current);kit.chmod(0o644)
+            raise RuntimeError(result.stderr.strip() or "nginx -t завершился ошибкой")
+        run(["systemctl","reload","nginx"])
 
 
 def remove_home_vpn():
@@ -1033,6 +1080,7 @@ def main():
     answers = collect_answers(arguments.site_domain, arguments.panel_domain)
     check_dns(answers["site_domain"], answers["public_ip"])
     check_dns(answers["panel_domain"], answers["public_ip"])
+    if answers["sni_mode"]=="local":check_dns(answers["sni"],answers["public_ip"])
     plan = build_topology(**answers)
     save_plan(plan, arguments.plan)
     validate_plan(arguments.plan)
@@ -1046,6 +1094,7 @@ def main():
     print("\nБудут установлены пакеты, UFW, TLS, 3x-ui, HOME-VPN и выбранные компоненты.")
     print(f"Сайт: https://{answers['site_domain']}")
     print(f"3x-ui: https://{answers['panel_domain']}")
+    print("SNI:",answers["sni"],"(локальная заглушка)" if answers["sni_mode"]=="local" else "")
     print("Режим 3x-ui:","сохранение существующей конфигурации" if answers["xui_install_mode"]=="preserve" else "чистая установка")
     require_confirmation("Подтвердите установку",APPLY_CONFIRMATION)
 

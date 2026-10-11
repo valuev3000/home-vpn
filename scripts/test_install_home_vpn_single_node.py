@@ -130,6 +130,19 @@ class ValidationTests(unittest.TestCase):
                 MODULE.detect_existing_domains(database, root),
             )
 
+    def test_existing_reality_sni_is_detected_without_private_key_output(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            database=pathlib.Path(temporary)/"x-ui.db"
+            connection=sqlite3.connect(database)
+            connection.execute("CREATE TABLE inbounds (enable INTEGER, stream_settings TEXT)")
+            connection.execute("INSERT INTO inbounds VALUES (?,?)",(1,json.dumps({
+                "security":"reality","realitySettings":{
+                    "serverNames":["mask.example.com"],"privateKey":"secret",
+                },
+            })))
+            connection.commit();connection.close()
+            self.assertEqual("mask.example.com",MODULE.detect_existing_reality_sni(database))
+
     def test_domain_questions_exist_only_as_detection_fallback(self):
         source = SCRIPT.read_text(encoding="utf-8")
         self.assertIn('panel_domain_override, "Укажите домен 3x-ui"', source)
@@ -256,6 +269,16 @@ class PlanTests(unittest.TestCase):
             xui_install_mode="preserve",
         )
         self.assertEqual("preserve",plan["xui_install_mode"])
+
+    def test_local_sni_mode_is_written_to_plan(self):
+        plan=MODULE.build_topology(
+            public_ip="203.0.113.10",site_domain="vpn.example.com",panel_domain="panel.example.com",
+            country="DE",node_name="Primary",sni="mask.example.com",sni_mode="local",
+            bot_enabled=False,installer_url=MODULE.DEFAULT_KIT_URL,
+            installer_sha256=MODULE.DEFAULT_KIT_SHA256,
+        )
+        self.assertEqual("local",plan["nodes"][0]["sni_mode"])
+        self.assertEqual("mask.example.com",plan["nodes"][0]["sni"])
 
     def test_server_setup_uses_requested_ssh_port_and_pinned_vpn_ports(self):
         script = MODULE.PREPARE_SERVER
