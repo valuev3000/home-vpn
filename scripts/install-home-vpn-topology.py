@@ -72,11 +72,29 @@ def ask(prompt, default="", secret=False):
     return value or default
 
 
-def ask_int(prompt, default, minimum=1):
-    value = ask(prompt, str(default))
-    if not value.isdigit() or int(value) < minimum:
-        raise SystemExit(f"{prompt}: требуется число не меньше {minimum}")
-    return int(value)
+def ask_validated(prompt, default, validator, secret=False):
+    while True:
+        try:return validator(ask(prompt,default,secret))
+        except (SystemExit,ValueError) as error:print(error)
+
+
+def ask_int(prompt, default, minimum=1, maximum=None):
+    def validate(value):
+        if not str(value).isdigit() or int(value)<minimum or (maximum is not None and int(value)>maximum):
+            interval=f"от {minimum} до {maximum}" if maximum is not None else f"не меньше {minimum}"
+            raise ValueError(f"{prompt}: требуется число {interval}")
+        return int(value)
+    return ask_validated(prompt,str(default),validate)
+
+
+def ask_yes_no(prompt, default=True):
+    marker="да" if default else "нет"
+    def validate(value):
+        normalized=str(value).strip().lower()
+        if normalized in ("да","д","yes","y"):return True
+        if normalized in ("нет","н","no","n"):return False
+        raise ValueError("Ответьте да или нет")
+    return ask_validated(prompt,marker,validate)
 
 
 def valid_ip(value, label):
@@ -130,6 +148,59 @@ def valid_public_url(value, label="public_url"):
     return parsed
 
 
+def valid_installer_url(value):
+    parsed=urllib.parse.urlparse(str(value or ""))
+    if parsed.scheme!="https" or not parsed.netloc or parsed.username or parsed.password:
+        raise ValueError("Нужен полный HTTPS URL без credentials")
+    return str(value)
+
+
+def valid_public_url_value(value, label="public_url"):
+    valid_public_url(value,label)
+    return str(value).rstrip("/")
+
+
+def valid_host(value, label, dns_only=False):
+    value=str(value or "").strip()
+    valid_dns=bool(re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?",value))
+    valid_ip_address=False
+    if not dns_only:
+        try:ipaddress.ip_address(value);valid_ip_address=True
+        except ValueError:pass
+    if "://" in value or not (valid_dns or valid_ip_address):
+        suffix="DNS-имя без схемы и пути" if dns_only else "IP или DNS-имя без схемы и пути"
+        raise ValueError(f"{label}: нужен {suffix}")
+    return value
+
+
+def valid_sha256(value):
+    value=str(value or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}",value):raise ValueError("SHA-256 должен содержать 64 hex-символа")
+    return value
+
+
+def valid_password(value, label):
+    if len(value)<10:raise ValueError(f"{label} должен содержать минимум 10 символов")
+    return value
+
+
+def valid_telegram_token(value):
+    if not re.fullmatch(r"[0-9]{6,12}:[A-Za-z0-9_-]{30,}",str(value or "")):
+        raise ValueError("Неверный формат Telegram Bot Token")
+    return value
+
+
+def valid_telegram_id(value):
+    if not str(value).isdigit() or int(value)<=0:raise ValueError("Telegram ID должен состоять только из цифр")
+    return str(value)
+
+
+def valid_telegram_channel(value):
+    if value and not re.fullmatch(r"@[A-Za-z0-9_]{5,32}",value):
+        raise ValueError("Укажите канал в формате @channel или оставьте пустым")
+    return value
+
+
 def valid_tls_path(value, label):
     value=str(value or "")
     path=pathlib.PurePosixPath(value)
@@ -138,21 +209,34 @@ def valid_tls_path(value, label):
     return value
 
 
-def node_wizard(index, mode, central_address=None):
+def node_wizard(index, mode, central_address=None, existing_nodes=None, forbidden_ssh=None):
+    existing_nodes=existing_nodes or []
+    used_ids={node["id"] for node in existing_nodes}
+    used_ssh={node["ssh_host"] for node in existing_nodes}|set(forbidden_ssh or ())
+    used_addresses={node["address"] for node in existing_nodes}
+    used_ingress={node.get("ingress_address") for node in existing_nodes}
+
+    def unique(validator, used, message):
+        def validate(value):
+            result=validator(value)
+            if result in used:raise ValueError(message)
+            return result
+        return validate
+
     country = ask_country(f"Нода {index}: код страны")
-    node_id = safe_id(ask(f"Нода {index}: ID", "foreign-" + str(index)))
+    node_id = ask_validated(f"Нода {index}: ID","foreign-"+str(index),unique(safe_id,used_ids,"ID ноды уже используется"))
     name = ask(f"Нода {index}: название", f"Зарубежная VPN-нода {index}")
-    ssh_host = ask(f"Нода {index}: root SSH (имя из ~/.ssh/config или root@host)", f"root@vpn-node-{index}.example.com")
-    address = valid_ip(ask(f"Нода {index}: адрес в защищённой межсерверной сети", f"10.10.0.{10 + index}"), "Адрес ноды")
+    ssh_host = ask_validated(f"Нода {index}: root SSH (имя из ~/.ssh/config или root@host)",f"root@vpn-node-{index}.example.com",unique(lambda value:valid_ssh_target(value,f"Нода {index}: SSH"),used_ssh,"Эта VPS уже используется в топологии"))
+    address = ask_validated(f"Нода {index}: адрес в защищённой межсерверной сети",f"10.10.0.{10+index}",unique(lambda value:valid_ip(value,"Адрес ноды"),used_addresses,"Этот адрес ноды уже используется"))
     if mode == 2:
-        ingress = valid_ip(ask(f"Нода {index}: отдельный входной IP на центральной ноде", central_address), "Central ingress")
-        public_host = ask(f"Нода {index}: адрес или домен в клиентских ссылках", ingress)
+        ingress = ask_validated(f"Нода {index}: отдельный входной IP на центральной ноде",central_address,unique(lambda value:valid_ip(value,"Central ingress"),used_ingress,"Этот входной IP уже используется"))
+        public_host = ask_validated(f"Нода {index}: адрес или домен в клиентских ссылках",ingress,lambda value:valid_host(value,"Адрес в клиентских ссылках"))
     else:
         ingress = ""
-        public_host = ask(f"Нода {index}: публичный IP или домен", address)
-    sni = ask(f"Нода {index}: SNI маскировки", "dl.google.com")
-    cert = ask(f"Нода {index}: TLS-сертификат на VPS (необязательно)", "")
-    key = ask(f"Нода {index}: TLS-ключ на VPS (необязательно)", "") if cert else ""
+        public_host = ask_validated(f"Нода {index}: публичный IP или домен",address,lambda value:valid_host(value,"Публичный адрес ноды"))
+    sni = ask_validated(f"Нода {index}: SNI маскировки","dl.google.com",lambda value:valid_host(value,"SNI",True))
+    cert = ask_validated(f"Нода {index}: TLS-сертификат на VPS (необязательно)","",lambda value:valid_tls_path(value,"TLS-сертификат ноды") if value else "")
+    key = ask_validated(f"Нода {index}: TLS-ключ на VPS (необязательно)","",lambda value:valid_tls_path(value,"TLS-ключ ноды")) if cert else ""
     return {
         "id": node_id, "name": name, "country": country, "flag": "🌐",
         "ssh_host": ssh_host, "address": address, "public_host": public_host,
@@ -165,31 +249,29 @@ def wizard():
     print(" 1 — центральная VPS (желательно RU): сайт; зарубежные VPS: 11 подключений")
     print(" 2 — то же, но каскад: центральная VPS → зарубежная VPS")
     print(" 3 — один зарубежный сервер: сайт, бот и 11 подключений")
-    mode = ask_int("Режим", 1)
-    if mode not in (1, 2, 3):
-        raise SystemExit("Допустимы режимы 1, 2 или 3")
-    installer_url = ask("HTTPS URL проверенного установщика 11 подключений")
-    installer_sha256 = ask("SHA-256 установщика").lower()
+    mode = ask_int("Режим",1,1,3)
+    installer_url = ask_validated("HTTPS URL проверенного установщика 11 подключений","",valid_installer_url)
+    installer_sha256 = ask_validated("SHA-256 установщика","",valid_sha256)
     if mode in (1, 2):
-        site_ssh = ask("Root SSH центральной VPS", "root@central.example.com")
-        site_address = valid_ip(ask("Адрес центральной VPS в служебной сети", "10.10.0.10"), "Адрес центральной VPS")
+        site_ssh = ask_validated("Root SSH центральной VPS","root@central.example.com",lambda value:valid_ssh_target(value,"SSH центральной VPS"))
+        site_address = ask_validated("Адрес центральной VPS в служебной сети","10.10.0.10",lambda value:valid_ip(value,"Адрес центральной VPS"))
         count = ask_int("Количество зарубежных нод", 1)
-        nodes = [node_wizard(index, mode, site_address) for index in range(1, count + 1)]
-        emergency_index = ask_int("Номер ноды для аварийного MTProto", 1)
-        if emergency_index > len(nodes):
-            raise SystemExit("Номер MTProto-ноды больше количества нод")
+        nodes = []
+        for index in range(1,count+1):
+            nodes.append(node_wizard(index,mode,site_address,nodes,{site_ssh}))
+        emergency_index = ask_int("Номер ноды для аварийного MTProto",1,1,len(nodes))
     else:
-        nodes = [node_wizard(1, mode)]
+        nodes = [node_wizard(1,mode)]
         site_ssh = nodes[0]["ssh_host"]
         site_address = nodes[0]["address"]
         emergency_index = 1
-    public_url = ask("Публичный URL сайта", f"https://{site_address}:8443").rstrip("/")
-    tls_cert = ask("TLS-сертификат сайта на VPS (необязательно)", "")
-    tls_key = ask("TLS-ключ сайта на VPS (необязательно)", "") if tls_cert else ""
+    public_url = ask_validated("Публичный URL сайта",f"https://{site_address}:8443",lambda value:valid_public_url_value(value,"Публичный URL сайта"))
+    tls_cert = ask_validated("TLS-сертификат сайта на VPS (необязательно)","",lambda value:valid_tls_path(value,"TLS-сертификат сайта") if value else "")
+    tls_key = ask_validated("TLS-ключ сайта на VPS (необязательно)","",lambda value:valid_tls_path(value,"TLS-ключ сайта")) if tls_cert else ""
     topology = {
         "mode": mode,
         "protocol_installer": {"url": installer_url, "sha256": installer_sha256},
-        "telegram_bot": {"enabled": ask("Установить Telegram-бот? [да/нет]", "да").lower() in ("да", "д", "yes", "y")},
+        "telegram_bot": {"enabled": ask_yes_no("Установить Telegram-бот?",True)},
         "telegram_egress": {"listen": "127.0.0.1", "port": 18080, "strategy": "leastPing", "probe_interval": "30s"},
         "site": {"ssh_host": site_ssh, "address": site_address, "public_url": public_url,
                  "tls_cert": tls_cert, "tls_key": tls_key},
@@ -1112,17 +1194,14 @@ def bot_enabled(topology):
 
 def credentials_wizard(topology):
     admin_user=ask("Логин администратора сайта","home-admin")
-    admin_password=ask("Пароль администратора сайта",secret=True)
-    if len(admin_password)<10:raise SystemExit("Пароль администратора должен содержать минимум 10 символов")
+    admin_password=ask_validated("Пароль администратора сайта","",lambda value:valid_password(value,"Пароль администратора"),True)
     if not bot_enabled(topology):
         return {"admin_user":admin_user,"admin_password":admin_password}
-    telegram_token=ask("Telegram Bot Token",secret=True)
-    telegram_admin_id=ask("Цифровой Telegram ID администратора")
-    if not telegram_token or not telegram_admin_id.isdigit():raise SystemExit("Нужны Bot Token и цифровой Telegram ID")
-    telegram_channel=ask("Telegram-канал (необязательно)","")
+    telegram_token=ask_validated("Telegram Bot Token","",valid_telegram_token,True)
+    telegram_admin_id=ask_validated("Цифровой Telegram ID администратора","",valid_telegram_id)
+    telegram_channel=ask_validated("Telegram-канал (необязательно)","",valid_telegram_channel)
     panel_user=ask("Логин панели бота","bot-admin")
-    panel_password=ask("Пароль панели бота",secret=True)
-    if len(panel_password)<10:raise SystemExit("Пароль панели бота должен содержать минимум 10 символов")
+    panel_password=ask_validated("Пароль панели бота","",lambda value:valid_password(value,"Пароль панели бота"),True)
     return {"admin_user":admin_user,"admin_password":admin_password,"telegram_token":telegram_token,"telegram_admin_id":telegram_admin_id,"telegram_channel":telegram_channel,"bot_panel_user":panel_user,"bot_panel_password":panel_password}
 
 

@@ -36,6 +36,12 @@ def topology(mode=1, nodes=1):
 
 
 class TopologyValidationTests(unittest.TestCase):
+    def test_integer_question_repeats_until_value_is_in_range(self):
+        answers=iter(("4","2"));original=MODULE.ask
+        MODULE.ask=lambda _prompt,_default,_secret=False:next(answers)
+        try:self.assertEqual(2,MODULE.ask_int("Режим",1,1,3))
+        finally:MODULE.ask=original
+
     def test_country_accepts_two_or_three_letters(self):
         for country in ("EE", "EST"):
             with self.subTest(country=country):
@@ -111,6 +117,20 @@ class TopologyValidationTests(unittest.TestCase):
         value["telegram_bot"] = {"enabled": False}
         MODULE.validate_topology(value)
         self.assertFalse(MODULE.bot_enabled(value))
+
+    def test_credentials_repeat_invalid_secret_values(self):
+        answers=iter((
+            "home-admin","short","AdminPassword123",
+            "bad-token","123456789:"+("A"*35),
+            "letters","123456789","bad channel","",
+            "bot-admin","short","BotPanelPassword123",
+        ))
+        original=MODULE.ask
+        MODULE.ask=lambda _prompt,_default="",_secret=False:next(answers)
+        try:result=MODULE.credentials_wizard({"telegram_bot":{"enabled":True}})
+        finally:MODULE.ask=original
+        self.assertEqual("123456789",result["telegram_admin_id"])
+        self.assertEqual("BotPanelPassword123",result["bot_panel_password"])
 
 
 class GeneratedConfigurationTests(unittest.TestCase):

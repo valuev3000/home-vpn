@@ -217,16 +217,35 @@ def ask(prompt, default=""):
     return input(f"{prompt}{suffix}: ").strip() or default
 
 
+def ask_validated(prompt, default, validator):
+    while True:
+        try:return validator(ask(prompt, default))
+        except (SystemExit, ValueError) as error:print(error)
+
+
+def validate_or_ask(value, prompt, validator):
+    if value:
+        try:return validator(value)
+        except (SystemExit,ValueError) as error:print(error)
+    return ask_validated(prompt,"",validator)
+
+
 def ask_yes_no(prompt, default=True):
     marker = "Д/н" if default else "д/Н"
-    value = input(f"{prompt} [{marker}]: ").strip().lower()
-    if not value:
-        return default
-    if value in ("д", "да", "y", "yes"):
-        return True
-    if value in ("н", "нет", "n", "no"):
-        return False
-    raise SystemExit("Ответьте да или нет")
+    while True:
+        value = input(f"{prompt} [{marker}]: ").strip().lower()
+        if not value:return default
+        if value in ("д", "да", "y", "yes"):return True
+        if value in ("н", "нет", "n", "no"):return False
+        print("Ответьте да или нет")
+
+
+def require_confirmation(prompt, expected):
+    while True:
+        value=input(f"{prompt}\nВведите {expected!r} или 0 для отмены: ").strip()
+        if value==expected:return
+        if value=="0":raise SystemExit("Операция отменена")
+        print(f"Ответ не совпадает. Введите точно {expected!r} или 0 для отмены.")
 
 
 def validate_domain(value, label):
@@ -261,6 +280,13 @@ def validate_https_url(value):
     parsed = urllib.parse.urlparse(str(value or ""))
     if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
         raise SystemExit("URL установщика должен быть полным HTTPS-адресом без credentials")
+    return value
+
+
+def validate_sha256(value):
+    value=str(value or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}",value):
+        raise SystemExit("SHA-256 должен содержать ровно 64 hex-символа")
     return value
 
 
@@ -318,10 +344,11 @@ def choose_xui_mode():
     print("\nОбнаружена существующая 3x-ui.")
     print("  1 — сохранить панель, inbounds, клиентов, ссылки и текущие правила firewall")
     print("  2 — чистая переустановка VPN-стека (удалит 3x-ui, клиентов и HOME-VPN после backup)")
-    choice=ask("Выберите вариант", "1")
-    if choice=="1":return "preserve"
-    if choice=="2":return "fresh"
-    raise SystemExit("Допустимы варианты 1 или 2")
+    while True:
+        choice=ask("Выберите вариант", "1")
+        if choice=="1":return "preserve"
+        if choice=="2":return "fresh"
+        print("Допустимы варианты 1 или 2")
 
 
 def nginx_vhosts(nginx_root=pathlib.Path("/etc/nginx")):
@@ -501,26 +528,49 @@ def collect_answers(site_domain_override="", panel_domain_override=""):
                 panel_domain_override = panel_domain_override or detected_panel
             except RuntimeError as error:
                 print(f"Автоопределение доменов не удалось: {error}")
-        if not panel_domain_override:
-            panel_domain_override = ask("Укажите домен 3x-ui")
-        if not site_domain_override:
-            site_domain_override = ask("Укажите домен сайта-заглушки")
-    site_domain = validate_domain(site_domain_override, "Домен сайта")
-    panel_domain = validate_domain(panel_domain_override, "Домен панели")
-    if site_domain == panel_domain:
-        raise SystemExit("Для сайта и 3x-ui нужны два разных домена")
+    panel_domain = validate_or_ask(
+        panel_domain_override, "Укажите домен 3x-ui",
+        lambda value:validate_domain(value,"Домен панели"),
+    )
+    site_domain = validate_or_ask(
+        site_domain_override, "Укажите домен сайта-заглушки",
+        lambda value:validate_domain(value,"Домен сайта"),
+    )
+    while site_domain == panel_domain:
+        print("Для сайта и 3x-ui нужны два разных домена")
+        site_domain=ask_validated(
+            "Укажите другой домен сайта-заглушки", "",
+            lambda value:validate_domain(value,"Домен сайта"),
+        )
     print(f"Используются домены: сайт {site_domain}, 3x-ui {panel_domain}")
-    public_ip = detect_public_ipv4(site_domain, panel_domain)
+    while True:
+        try:
+            public_ip=detect_public_ipv4(site_domain,panel_domain)
+            break
+        except SystemExit as error:
+            print(error)
+            panel_domain=ask_validated(
+                "Повторно укажите домен 3x-ui",panel_domain,
+                lambda value:validate_domain(value,"Домен панели"),
+            )
+            site_domain=ask_validated(
+                "Повторно укажите домен сайта-заглушки",site_domain,
+                lambda value:validate_domain(value,"Домен сайта"),
+            )
+            while site_domain==panel_domain:
+                print("Для сайта и 3x-ui нужны два разных домена")
+                site_domain=ask_validated(
+                    "Укажите другой домен сайта-заглушки","",
+                    lambda value:validate_domain(value,"Домен сайта"),
+                )
     ssh_port = detected_ssh_port()
     print(f"Определено автоматически: IPv4 {public_ip}, SSH-порт {ssh_port}")
     country = ask_country()
     node_name = ask("Название VPN-ноды", "Main VPN node")
-    sni = validate_domain(ask("SNI маскировки", "dl.google.com"), "SNI")
+    sni = ask_validated("SNI маскировки", "dl.google.com", lambda value:validate_domain(value,"SNI"))
     bot_enabled = ask_yes_no("Установить Telegram-бота?", True)
-    installer_url = validate_https_url(ask("HTTPS URL установщика 3x-ui/KIT", DEFAULT_KIT_URL)) if xui_install_mode=="fresh" else DEFAULT_KIT_URL
-    installer_sha256 = ask("SHA-256 установщика", DEFAULT_KIT_SHA256).lower() if xui_install_mode=="fresh" else DEFAULT_KIT_SHA256
-    if not re.fullmatch(r"[0-9a-f]{64}", installer_sha256):
-        raise SystemExit("SHA-256 должен содержать ровно 64 hex-символа")
+    installer_url = ask_validated("HTTPS URL установщика 3x-ui/KIT",DEFAULT_KIT_URL,validate_https_url) if xui_install_mode=="fresh" else DEFAULT_KIT_URL
+    installer_sha256 = ask_validated("SHA-256 установщика",DEFAULT_KIT_SHA256,validate_sha256) if xui_install_mode=="fresh" else DEFAULT_KIT_SHA256
     return {
         "public_ip": public_ip, "ssh_port": ssh_port,"xui_install_mode":xui_install_mode,
         "site_domain": site_domain, "panel_domain": panel_domain,
@@ -844,8 +894,7 @@ def restore_full_backup(plan_path=DEFAULT_PLAN):
         verify_full_backup(working_archive)
         print(f"Backup проверен: {archive}")
         print("Будут заменены настройки и данные сайта, 3x-ui, TLS/Nginx и Telegram-бота.")
-        if input("Для восстановления введите 'RESTORE HOME VPN': ").strip()!="RESTORE HOME VPN":
-            raise SystemExit("Восстановление отменено")
+        require_confirmation("Подтвердите восстановление HOME-VPN", "RESTORE HOME VPN")
         rollback=create_full_backup()
         active=active_managed_services()
         try:
@@ -924,8 +973,7 @@ def remove_home_vpn():
     if not home_vpn_installed():raise SystemExit("HOME-VPN не установлен")
     backup_before_lifecycle_change()
     print("3x-ui, её inbounds и пользовательские клиенты удаляться не будут.")
-    if input("Для удаления HOME-VPN введите 'DELETE HOME-VPN': ").strip() != "DELETE HOME-VPN":
-        raise SystemExit("Удаление отменено")
+    require_confirmation("Подтвердите удаление HOME-VPN", "DELETE HOME-VPN")
     purge = ask_yes_no("Удалить также базы HOME-VPN и его настройки?", False)
     restore_preserved_nginx_route()
     source = deploy_current_source()
@@ -987,15 +1035,11 @@ def main():
     print(f"Сайт: https://{answers['site_domain']}")
     print(f"3x-ui: https://{answers['panel_domain']}")
     print("Режим 3x-ui:","сохранение существующей конфигурации" if answers["xui_install_mode"]=="preserve" else "чистая установка")
-    confirmation = input(f"Для продолжения введите {APPLY_CONFIRMATION!r}: ").strip()
-    if confirmation != APPLY_CONFIRMATION:
-        raise SystemExit("Установка отменена; сохранён только план")
+    require_confirmation("Подтвердите установку",APPLY_CONFIRMATION)
 
     if existing_xui_detected():backup_before_lifecycle_change()
     if answers["xui_install_mode"]=="fresh" and existing_xui_detected():
-        destructive=input("Для удаления 3x-ui и всех клиентов введите 'ERASE 3X-UI AND CLIENTS': ").strip()
-        if destructive!="ERASE 3X-UI AND CLIENTS":
-            raise SystemExit("Очистка отменена; существующая 3x-ui не изменена")
+        require_confirmation("Подтвердите удаление 3x-ui и всех клиентов","ERASE 3X-UI AND CLIENTS")
         run(["bash","-s"],input_text=RESET_EXISTING_STACK,timeout=900)
 
     run(

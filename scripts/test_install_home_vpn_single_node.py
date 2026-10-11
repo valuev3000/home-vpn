@@ -36,6 +36,28 @@ class ValidationTests(unittest.TestCase):
         finally:
             MODULE.ask = original
 
+    def test_yes_no_question_repeats_after_invalid_input(self):
+        answers=iter(("возможно","да"));original=getattr(MODULE,"input",None)
+        MODULE.input=lambda _prompt:next(answers)
+        try:self.assertTrue(MODULE.ask_yes_no("Продолжить?",False))
+        finally:
+            if original is None:delattr(MODULE,"input")
+            else:MODULE.input=original
+
+    def test_confirmation_repeats_and_accepts_exact_phrase(self):
+        answers=iter(("неверно","INSTALL HOME VPN"));original=getattr(MODULE,"input",None)
+        MODULE.input=lambda _prompt:next(answers)
+        try:self.assertIsNone(MODULE.require_confirmation("Подтверждение","INSTALL HOME VPN"))
+        finally:
+            if original is None:delattr(MODULE,"input")
+            else:MODULE.input=original
+
+    def test_sha_question_repeats_after_invalid_input(self):
+        answers=iter(("bad","a"*64));original=MODULE.ask
+        MODULE.ask=lambda _prompt,_default:next(answers)
+        try:self.assertEqual("a"*64,MODULE.ask_validated("SHA","",MODULE.validate_sha256))
+        finally:MODULE.ask=original
+
     def test_domains_are_normalized(self):
         self.assertEqual("vpn.example.com", MODULE.validate_domain("VPN.Example.COM.", "domain"))
 
@@ -110,8 +132,9 @@ class ValidationTests(unittest.TestCase):
 
     def test_domain_questions_exist_only_as_detection_fallback(self):
         source = SCRIPT.read_text(encoding="utf-8")
-        self.assertIn('ask("Укажите домен 3x-ui")', source)
-        self.assertIn('ask("Укажите домен сайта-заглушки")', source)
+        self.assertIn('panel_domain_override, "Укажите домен 3x-ui"', source)
+        self.assertIn('site_domain_override, "Укажите домен сайта-заглушки"', source)
+        self.assertIn("validate_or_ask",source)
         self.assertIn("Автоопределение доменов не удалось", source)
 
 
