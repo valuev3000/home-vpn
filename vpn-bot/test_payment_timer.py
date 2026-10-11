@@ -122,6 +122,36 @@ class SiteCatalogIntegrationTests(unittest.TestCase):
 
 
 class AdminNotificationTests(unittest.TestCase):
+    def test_tls_expiry_alert_is_sent_once_per_threshold(self):
+        handle,state=tempfile.mkstemp();os.close(handle);os.unlink(state)
+        original_state,original_api,original_tg,original_admin=BOT.TLS_ALERTS_STATE,BOT.api,BOT.tg,BOT.ADMIN_ID
+        calls=[];expiry=int(time.time())+6*86400
+        try:
+            BOT.TLS_ALERTS_STATE=state;BOT.ADMIN_ID=77
+            BOT.api=lambda path:{"checked_at":int(time.time()),"checks":{"certificates":[{"path":"/etc/letsencrypt/live/vpn/fullchain.pem","not_after":expiry,"seconds_left":6*86400,"days_left":6}]}}
+            BOT.tg=lambda method,data=None,files=None:calls.append((method,data)) or {"ok":True}
+            self.assertEqual(BOT.deliver_tls_certificate_alerts(),1)
+            self.assertEqual(BOT.deliver_tls_certificate_alerts(),0)
+            self.assertEqual(len(calls),1);self.assertIn("6 дн.",calls[0][1]["text"])
+        finally:
+            BOT.TLS_ALERTS_STATE,BOT.api,BOT.tg,BOT.ADMIN_ID=original_state,original_api,original_tg,original_admin
+            if os.path.exists(state):os.unlink(state)
+
+    def test_tls_renewal_sends_recovery(self):
+        handle,state=tempfile.mkstemp();os.close(handle)
+        original_state,original_api,original_tg,original_admin=BOT.TLS_ALERTS_STATE,BOT.api,BOT.tg,BOT.ADMIN_ID
+        path="/etc/letsencrypt/live/vpn/fullchain.pem";calls=[]
+        with open(state,"w",encoding="utf-8") as output:json.dump({path:{"level":"days-7","not_after":100}},output)
+        try:
+            BOT.TLS_ALERTS_STATE=state;BOT.ADMIN_ID=77
+            BOT.api=lambda request:{"checked_at":int(time.time()),"checks":{"certificates":[{"path":path,"not_after":int(time.time())+80*86400,"seconds_left":80*86400,"days_left":80}]}}
+            BOT.tg=lambda method,data=None,files=None:calls.append((method,data)) or {"ok":True}
+            self.assertEqual(BOT.deliver_tls_certificate_alerts(),1)
+            self.assertIn("успешно обновлён",calls[0][1]["text"])
+        finally:
+            BOT.TLS_ALERTS_STATE,BOT.api,BOT.tg,BOT.ADMIN_ID=original_state,original_api,original_tg,original_admin
+            if os.path.exists(state):os.unlink(state)
+
     def test_panel_notification_targets_only_configured_administrator(self):
         original_environment,original_telegram=ADMIN_CONTROL.environment,ADMIN_CONTROL.telegram;calls=[]
         try:

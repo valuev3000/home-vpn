@@ -334,19 +334,28 @@ class AdminIdentityTests(unittest.TestCase):
 class TelegramSiteRegistrationTests(unittest.TestCase):
     def setUp(self):
         handle,self.path=tempfile.mkstemp();os.close(handle);APP.DB=self.path;APP.init()
-        self.original_secret=APP.API_SECRET;self.original_panel_clients=APP.panel_clients;self.original_send_account_email=APP.send_account_email;self.original_smtp_host=APP.SMTP_HOST;self.original_node_metrics=APP.node_metrics
+        self.original_secret=APP.API_SECRET;self.original_panel_clients=APP.panel_clients;self.original_send_account_email=APP.send_account_email;self.original_smtp_host=APP.SMTP_HOST;self.original_node_metrics=APP.node_metrics;self.original_system_health_data=APP.system_health_data
         APP.API_SECRET='registration-test-secret';APP.panel_clients=lambda: [];APP.SMTP_HOST='smtp.test';APP.node_metrics=lambda node:{'id':node.get('id'),'online':True,'weight':node.get('weight',100),'active_users':0,'cpu':0,'ram_percent':0}
         self.server=APP.ThreadingHTTPServer(('127.0.0.1',0),APP.H)
         self.thread=threading.Thread(target=self.server.serve_forever,daemon=True);self.thread.start()
 
     def tearDown(self):
         self.server.shutdown();self.server.server_close();self.thread.join(timeout=2)
-        APP.API_SECRET=self.original_secret;APP.panel_clients=self.original_panel_clients;APP.send_account_email=self.original_send_account_email;APP.SMTP_HOST=self.original_smtp_host;APP.node_metrics=self.original_node_metrics;os.unlink(self.path)
+        APP.API_SECRET=self.original_secret;APP.panel_clients=self.original_panel_clients;APP.send_account_email=self.original_send_account_email;APP.SMTP_HOST=self.original_smtp_host;APP.node_metrics=self.original_node_metrics;APP.system_health_data=self.original_system_health_data;os.unlink(self.path)
 
     def register(self):
         body=json.dumps({'telegram_id':987654321,'login':'familia-io','tg_username':'sample_user'}).encode()
         request=urllib.request.Request(f'http://127.0.0.1:{self.server.server_port}/api/bot/profile',body,headers={'X-API-Key':APP.API_SECRET,'Content-Type':'application/json'})
         with urllib.request.urlopen(request,timeout=3) as response:return json.load(response)
+
+    def test_bot_system_health_requires_api_secret(self):
+        APP.system_health_data=lambda:{'checked_at':123,'checks':{'certificates':[]}}
+        connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3)
+        connection.request('GET','/api/bot/system-health');response=connection.getresponse();response.read()
+        self.assertEqual(403,response.status);connection.close()
+        connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3)
+        connection.request('GET','/api/bot/system-health',headers={'X-API-Key':APP.API_SECRET});response=connection.getresponse();payload=json.loads(response.read());connection.close()
+        self.assertEqual(200,response.status);self.assertEqual(123,payload['checked_at'])
 
     def admin_cookie(self):
         with APP.db() as connection:epoch=connection.execute('SELECT session_epoch FROM users WHERE username=?',(APP.ADMIN,)).fetchone()[0] or 0

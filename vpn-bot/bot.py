@@ -10,6 +10,7 @@ ADMIN_ID=int(os.getenv("TELEGRAM_ADMIN_ID","0") or 0)
 POLL=int(os.getenv("POLL_SECONDS","3"))
 STATE=os.getenv("BOT_STATE_FILE","/var/lib/vpn-bot/last_event_v2")
 PAYMENT_TIMERS_STATE=os.getenv("PAYMENT_TIMERS_STATE","/var/lib/vpn-bot/payment_timers.json")
+TLS_ALERTS_STATE=os.getenv("TLS_ALERTS_STATE","/var/lib/vpn-bot/tls-alerts.json")
 MENU_CONFIG=os.getenv("BOT_MENU_CONFIG","/etc/vpn-bot-menu.json")
 COMMANDS_STATE=os.getenv("BOT_COMMANDS_STATE","/var/lib/vpn-bot/commands.sha256")
 PROXY_DISABLE_GUIDE=os.getenv("PROXY_DISABLE_GUIDE","/opt/vpn-bot/assets/proxy-disable-guide.png")
@@ -278,6 +279,61 @@ def send(chat,text,markup=None):
     d={"chat_id":chat,"text":text,"parse_mode":"HTML","disable_web_page_preview":"true"}
     if markup:d["reply_markup"]=markup
     return tg("sendMessage",d)
+
+def tls_alert_level(seconds_left):
+    seconds_left=int(seconds_left)
+    if seconds_left<=0:return "expired"
+    for days in (1,3,7,14):
+        if seconds_left<=days*86400:return f"days-{days}"
+    return ""
+
+def load_tls_alerts():
+    try:
+        with open(TLS_ALERTS_STATE,encoding="utf-8") as source:value=json.load(source)
+        return value if isinstance(value,dict) else {}
+    except (OSError,json.JSONDecodeError):return {}
+
+def save_tls_alerts(value):
+    os.makedirs(os.path.dirname(TLS_ALERTS_STATE),exist_ok=True);temporary=TLS_ALERTS_STATE+".tmp"
+    with open(temporary,"w",encoding="utf-8") as output:json.dump(value,output,ensure_ascii=False,indent=2);output.write("\n")
+    os.chmod(temporary,0o600);os.replace(temporary,TLS_ALERTS_STATE)
+
+def deliver_tls_certificate_alerts():
+    if not ADMIN_ID:return 0
+    health=api("/api/bot/system-health")
+    if not health.get("checked_at"):return 0
+    certificates=(health.get("checks") or {}).get("certificates") or []
+    state=load_tls_alerts();sent=0;seen=set()
+    if not certificates:
+        key="__missing__";seen.add(key)
+        if state.get(key)!="missing":
+            send(ADMIN_ID,"🚨 <b>TLS-сертификат не найден</b>\n\nПроверьте Certbot и каталог <code>/etc/letsencrypt/live</code>.")
+            state[key]="missing";sent+=1
+    else:
+        if state.pop("__missing__",None):
+            send(ADMIN_ID,"✅ <b>TLS-сертификат снова обнаружен</b>");sent+=1
+        for certificate in certificates:
+            path=str(certificate.get("path") or "неизвестный сертификат");seen.add(path)
+            if certificate.get("error"):
+                level="error";message=f"🚨 <b>Не удалось проверить TLS-сертификат</b>\n\n<code>{html.escape(path)}</code>\n{html.escape(str(certificate['error']))}"
+            elif certificate.get("not_after") is None:continue
+            else:
+                level=tls_alert_level(certificate.get("seconds_left",0))
+                days=int(certificate.get("days_left",0));date=time.strftime("%d.%m.%Y %H:%M",time.localtime(int(certificate["not_after"])))
+                if level=="expired":message=f"🚨 <b>TLS-сертификат истёк</b>\n\n<code>{html.escape(path)}</code>\nСрок закончился: {date}"
+                elif level:message=f"⚠️ <b>Истекает TLS-сертификат</b>\n\n<code>{html.escape(path)}</code>\nОсталось: {days} дн.\nДата окончания: {date}"
+                else:message=""
+            previous=state.get(path) or {}
+            fingerprint={"level":level,"not_after":certificate.get("not_after")}
+            if level and previous!=fingerprint:
+                send(ADMIN_ID,message);state[path]=fingerprint;sent+=1
+            elif not level and previous.get("level"):
+                send(ADMIN_ID,f"✅ <b>TLS-сертификат успешно обновлён</b>\n\n<code>{html.escape(path)}</code>")
+                state.pop(path,None);sent+=1
+    for key in list(state):
+        if key not in seen and key!="__missing__":state.pop(key,None)
+    save_tls_alerts(state)
+    return sent
 
 def deliver_emergency_reminders():
     sent=0
@@ -835,7 +891,7 @@ def main():
         with open(STATE) as f:last_event=int(f.read().strip())
     except Exception:
         last_event=api("/api/bot/events?after=0").get("last_id",0);save_cursor(last_event)
-    last_expiry_check=0;last_maintenance_check=0;last_emergency_check=0
+    last_expiry_check=0;last_maintenance_check=0;last_emergency_check=0;last_tls_check=0
     while True:
         try:
             for u in tg("getUpdates",{"offset":offset,"timeout":25,"allowed_updates":json.dumps(["message","callback_query"])})["result"]:
@@ -896,6 +952,8 @@ def main():
                 last_maintenance_check=time.time();deliver_maintenance()
             if time.time()-last_emergency_check>=60:
                 last_emergency_check=time.time();deliver_emergency_reminders()
+            if time.time()-last_tls_check>=3600:
+                last_tls_check=time.time();deliver_tls_certificate_alerts()
             if time.time()-last_expiry_check>=3600:
                 last_expiry_check=time.time()
                 for x in api("/api/bot/expiry-reminders").get("reminders",[]):

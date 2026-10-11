@@ -2,10 +2,13 @@
 """Low-cost operational checks for a small HOME-VPN server."""
 
 import json
+import hashlib
+import math
 import os
 import pathlib
 import pwd
 import shutil
+import ssl
 import subprocess
 import time
 
@@ -17,6 +20,38 @@ CERTIFICATES = (
     pathlib.Path('/etc/x-ui/cert/panel.crt'),
     pathlib.Path('/root/cert/fullchain.pem'),
 )
+LETS_ENCRYPT_LIVE = pathlib.Path('/etc/letsencrypt/live')
+
+
+def certificate_paths(live_dir=LETS_ENCRYPT_LIVE):
+    paths = sorted(pathlib.Path(live_dir).glob('*/fullchain.pem')) + list(CERTIFICATES)
+    result=[];seen=set()
+    for path in paths:
+        if not path.is_file():continue
+        try:fingerprint=hashlib.sha256(path.read_bytes()).digest()
+        except OSError:fingerprint=str(path.resolve())
+        if fingerprint in seen:continue
+        seen.add(fingerprint);result.append(path)
+    return result
+
+
+def certificate_info(path, now):
+    result = subprocess.run(
+        ['openssl', 'x509', '-enddate', '-noout', '-in', str(path)],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0 or not result.stdout.startswith('notAfter='):
+        return {'path': str(path), 'error': 'не удалось прочитать срок действия'}
+    try:
+        not_after = int(ssl.cert_time_to_seconds(result.stdout.partition('=')[2].strip()))
+    except (ValueError, OverflowError):
+        return {'path': str(path), 'error': 'некорректный срок действия'}
+    seconds_left = not_after - now
+    return {
+        'path': str(path), 'not_after': not_after,
+        'seconds_left': seconds_left,
+        'days_left': math.ceil(seconds_left / 86400),
+    }
 
 
 def main() -> None:
@@ -44,13 +79,17 @@ def main() -> None:
         checks['service_'+service]=active
         if not active:warnings.append(f'Служба {service} не работает')
 
-    certificate=next((path for path in CERTIFICATES if path.is_file()),None)
-    checks['certificate']=str(certificate) if certificate else None
-    if certificate:
-        valid=subprocess.run(['openssl','x509','-checkend',str(14*86400),'-noout','-in',str(certificate)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0
-        checks['certificate_valid_more_than_14_days']=valid
-        if not valid:warnings.append('TLS-сертификат истекает менее чем через 14 дней')
-    else:warnings.append('TLS-сертификат не найден в стандартных каталогах')
+    certificates=[certificate_info(path,now) for path in certificate_paths()]
+    checks['certificates']=certificates
+    readable=[item for item in certificates if item.get('not_after')]
+    certificate=min(readable,key=lambda item:item['not_after']) if readable else None
+    checks['certificate']=certificate['path'] if certificate else None
+    checks['certificate_valid_more_than_14_days']=bool(certificate and certificate['seconds_left']>14*86400)
+    for item in certificates:
+        if item.get('error'):warnings.append(f"TLS-сертификат {item['path']}: {item['error']}")
+        elif item['seconds_left']<=0:warnings.append(f"TLS-сертификат {item['path']} истёк")
+        elif item['seconds_left']<=14*86400:warnings.append(f"TLS-сертификат {item['path']} истекает через {item['days_left']} дн.")
+    if not certificates:warnings.append('TLS-сертификат не найден в стандартных каталогах и /etc/letsencrypt/live')
 
     payload={'ok':not warnings,'checked_at':now,'warnings':warnings,'checks':checks}
     OUTPUT.parent.mkdir(parents=True,exist_ok=True)

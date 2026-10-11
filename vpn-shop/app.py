@@ -940,12 +940,17 @@ def status_data():
   out['nodes'].append(item)
  return out
 def system_health_notice():
- try:
-  with open('/var/lib/vpn-shop/system-health.json',encoding='utf-8') as stream:data=json.load(stream)
+ data=system_health_data()
+ if data:
   if data.get('ok'):return ''
   warnings=data.get('warnings') or []
   return '<div class="callout warn"><b>Требуется внимание</b><ul>'+''.join('<li>'+html.escape(str(item))+'</li>' for item in warnings)+'</ul></div>'
- except Exception:return '<div class="callout warn"><b>Системная проверка ещё не выполнялась</b></div>'
+ return '<div class="callout warn"><b>Системная проверка ещё не выполнялась</b></div>'
+def system_health_data(path='/var/lib/vpn-shop/system-health.json'):
+ try:
+  with open(path,encoding='utf-8') as stream:data=json.load(stream)
+  return data if isinstance(data,dict) else {}
+ except (OSError,json.JSONDecodeError):return {}
 def active_client(client):
  expiry=int(client.get('expiryTime') or 0);return bool(client.get('enable')) and (expiry==0 or expiry>int(time.time()*1000))
 def active_telegram_subscribers():
@@ -1565,6 +1570,9 @@ class H(BaseHTTPRequestHandler):
   if p=='/api/bot/status':
    if self.headers.get('X-API-Key')!=API_SECRET:return self.jout(403,{'error':'forbidden'})
    s=status_data();s['checked_at']=int(time.time());return self.jout(200,s)
+  if p=='/api/bot/system-health':
+   if self.headers.get('X-API-Key')!=API_SECRET:return self.jout(403,{'error':'forbidden'})
+   return self.jout(200,system_health_data())
   if p=='/api/bot/catalog':
    if self.headers.get('X-API-Key')!=API_SECRET:return self.jout(403,{'error':'forbidden'})
    query=parse_qs(urlparse(self.path).query);tgid=int(query.get('telegram_id',[0])[0] or 0);catalog_user_id=None
