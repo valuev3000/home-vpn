@@ -136,6 +136,26 @@ class NodeBalancingTests(unittest.TestCase):
         self.assertEqual('one',APP.choose_node())
 
 
+class XuiInventoryTests(unittest.TestCase):
+    def test_master_and_every_3xui_node_are_normalized(self):
+        master={'panelGuid':'master-guid','panelVersion':'3.7.0','cpu':12.34,'uptime':86461,'mem':{'current':50,'total':100},'disk':{'current':25,'total':100},'netIO':{'up':10,'down':20},'netTraffic':{'sent':30,'recv':40},'xray':{'state':'running','version':'26.7.28'}}
+        nodes=[
+            {'id':1,'guid':'fi-guid','name':'FI','enable':True,'status':'online','xrayState':'running','panelVersion':'3.6.0','xrayVersion':'26.7.28','cpuPct':3.2,'memPct':21,'onlineCount':2,'clientCount':5,'inboundCount':11,'latencyMs':41},
+            {'id':2,'guid':'pl-guid','name':'PL','enable':True,'status':'online','xrayState':'running','panelVersion':'3.8.5','xrayVersion':'26.6.27','cpuPct':7.1,'memPct':58,'onlineCount':4,'clientCount':18,'inboundCount':5,'latencyMs':77},
+        ]
+        clients=[{'enable':True,'expiryTime':0},{'enable':False,'expiryTime':0}]
+        inbounds=[{'originNodeGuid':'master-guid','enable':False},{'originNodeGuid':'fi-guid','enable':True}]
+        result=APP.normalize_xui_inventory(master,nodes,clients,inbounds,master_name='RU master',master_country='RU',master_flag='🇷🇺',master_address='127.0.0.1')
+        self.assertEqual([x['name'] for x in result],['RU master','FI','PL'])
+        self.assertTrue(result[0]['primary']);self.assertEqual(result[0]['panel_version'],'3.7.0');self.assertEqual(result[0]['active_users'],1);self.assertEqual(result[0]['inbound_count'],1);self.assertFalse(result[0]['connectable'])
+        self.assertEqual(result[1]['flag'],'🇫🇮');self.assertEqual(result[2]['panel_version'],'3.8.5');self.assertEqual(result[2]['inbound_count'],5)
+
+    def test_offline_xray_marks_reachable_panel_unavailable(self):
+        result=APP.normalize_xui_inventory({'panelVersion':'3.7.0','xray':{'state':'error'}},[],[],master_name='RU')
+        self.assertTrue(result[0]['panel_online'])
+        self.assertFalse(result[0]['online'])
+
+
 class YooKassaPaymentTests(unittest.TestCase):
     def setUp(self):
         handle,self.path=tempfile.mkstemp();os.close(handle);self.previous_db=APP.DB;APP.DB=self.path;APP.init()

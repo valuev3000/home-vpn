@@ -33,6 +33,8 @@ CONFIG=load_config();PRICING=CONFIG.get('pricing') or DEFAULT_CONFIG['pricing'];
 PUBLIC=os.getenv('PUBLIC_URL','http://127.0.0.1:8080').rstrip('/'); API_SECRET=os.getenv('API_SECRET','change-me'); SESSION=os.getenv('SESSION_SECRET','change-me').encode(); ADMIN_TG=int(os.getenv('TELEGRAM_ADMIN_ID','0') or 0)
 SMTP_HOST=os.getenv('SMTP_HOST','').strip();SMTP_PORT=int(os.getenv('SMTP_PORT','587') or 587);SMTP_USER=os.getenv('SMTP_USERNAME','').strip();SMTP_PASSWORD=os.getenv('SMTP_PASSWORD','');SMTP_STARTTLS=os.getenv('SMTP_STARTTLS','1')=='1';SMTP_SSL=os.getenv('SMTP_SSL','0')=='1';MAIL_FROM=os.getenv('MAIL_FROM','support@my.domain.ru').strip();MAIL_REPLY_TO=os.getenv('MAIL_REPLY_TO',MAIL_FROM).strip();MAIL_SETTINGS_KEY=os.getenv('MAIL_SETTINGS_KEY','').encode()
 ADMIN=os.getenv('ADMIN_USER','home-admin'); ADMIN_PASSWORD=os.getenv('ADMIN_PASSWORD','change-me'); BOT_URL=os.getenv('TELEGRAM_BOT_URL','https://t.me/your_bot');BOT_ADMIN_URL=os.getenv('BOT_ADMIN_URL','').strip();BOT_ADMIN_PATH=urlparse(BOT_ADMIN_URL).path.rstrip('/') if BOT_ADMIN_URL and urlparse(BOT_ADMIN_URL).hostname==urlparse(PUBLIC).hostname else '';BOT_ADMIN_UPSTREAM=urlparse(os.getenv('BOT_ADMIN_UPSTREAM','http://127.0.0.1:8090')); XURL=(PRIMARY_NODE.get('panel_url') or os.getenv('XUI_URL','')).rstrip('/'); XTOKEN=os.getenv(str(PRIMARY_NODE.get('token_env') or 'XUI_TOKEN'),os.getenv('XUI_TOKEN','')); XIDS=[int(x) for x in (PRIMARY_NODE.get('inbound_ids') or [int(v) for v in os.getenv('XUI_INBOUND_IDS','1').split(',')])]
+XUI_INVENTORY_URL=os.getenv('XUI_INVENTORY_URL',XURL).rstrip('/');XUI_INVENTORY_TOKEN=os.getenv('XUI_INVENTORY_TOKEN',XTOKEN if XUI_INVENTORY_URL==XURL else '');XUI_INVENTORY_NAME=os.getenv('XUI_INVENTORY_NAME','Главная нода').strip() or 'Главная нода';XUI_INVENTORY_COUNTRY=os.getenv('XUI_INVENTORY_COUNTRY','').strip().upper();XUI_INVENTORY_FLAG=os.getenv('XUI_INVENTORY_FLAG','🌐').strip() or '🌐'
+INVENTORY_LOCK=threading.Lock();INVENTORY_CACHE={'expires':0.0,'servers':[]}
 if BOT_ADMIN_UPSTREAM.scheme!='http' or not BOT_ADMIN_UPSTREAM.hostname or BOT_ADMIN_UPSTREAM.username or BOT_ADMIN_UPSTREAM.password or BOT_ADMIN_UPSTREAM.path not in ('','/') or BOT_ADMIN_UPSTREAM.query or BOT_ADMIN_UPSTREAM.fragment:raise RuntimeError('BOT_ADMIN_UPSTREAM должен быть внутренним HTTP URL без credentials и path')
 try:BOT_ADMIN_ADDRESS=ipaddress.ip_address(BOT_ADMIN_UPSTREAM.hostname)
 except ValueError as error:raise RuntimeError('BOT_ADMIN_UPSTREAM должен содержать IP защищённой сети') from error
@@ -889,6 +891,24 @@ def format_bytes(value):
  for unit in ('Б','КБ','МБ','ГБ','ТБ'):
   if value<1024 or unit=='ТБ':return f'{value:.0f} {unit}' if unit in ('Б','КБ') else f'{value:.1f} {unit}'
   value/=1024
+def format_uptime(value):
+ seconds=max(0,int(value or 0));days,hours=divmod(seconds,86400);hours,minutes=divmod(hours,3600)
+ return (f'{days} д. {hours} ч.' if days else f'{hours} ч. {minutes//60} мин.') if seconds else '—'
+def inventory_table(servers,public=False):
+ rows=[]
+ for node in servers:
+  flag=str(node.get('flag') or node_flag(node.get('name')));label='Главная нода' if node.get('primary') else ('Вложенная нода' if node.get('transitive') else 'Нода')
+  state=badge('online' if node.get('online') else 'offline');panel='online' if node.get('panel_online') else 'offline';xray=node.get('xray_state','unknown')
+  if public:
+   message=('Можно подключаться к этому серверу.' if node.get('connectable') else ('Управляющая нода работает; пользовательские подключения на ней не размещены.' if node.get('primary') and node.get('online') else 'Сервер временно недоступен. Выберите другой сервер.'))
+   rows.append(f"<tr><td class=table-title>{html.escape(flag)} {html.escape(str(node.get('name') or label))}<br><small>{label}</small></td><td>{state}</td><td>{message}</td></tr>")
+   continue
+  disk='—' if node.get('disk_percent') is None else str(node.get('disk_percent'))+'%';address=html.escape(str(node.get('address') or '—'))
+  heartbeat='сейчас' if node.get('primary') else (time.strftime('%d.%m %H:%M',time.localtime(int(node.get('last_heartbeat') or 0))) if node.get('last_heartbeat') else 'нет данных')
+  cpu='—' if node.get('cpu') is None else str(node.get('cpu'))+'%';ram='—' if node.get('ram_percent') is None else str(node.get('ram_percent'))+'%';inbound_text=str(int(node.get('active_inbound_count') or 0))+' / '+str(int(node.get('inbound_count') or 0))
+  rows.append(f'''<tr><td><b>{html.escape(flag)} {html.escape(str(node.get('name') or label))}</b><br><small>{label} · {address}</small></td><td>{state}<br><small>Панель: {html.escape(panel)} · Xray: {html.escape(str(xray))}</small></td><td><b>{html.escape(str(node.get('panel_version') or '—'))}</b><br><small>Xray {html.escape(str(node.get('xray_version') or '—'))}</small></td><td>{cpu}</td><td>{ram}</td><td>{disk}</td><td>{format_bytes(node.get('network_down',0))} ↓ / {format_bytes(node.get('network_up',0))} ↑</td><td>{int(node.get('active_users') or 0)} / {int(node.get('client_count') or 0)}</td><td>{inbound_text}</td><td>{int(node.get('latency_ms') or 0)} мс<br><small>{html.escape(heartbeat)}</small></td><td>{format_uptime(node.get('uptime'))}</td></tr>''')
+ if rows:return ''.join(rows)
+ return '<tr><td colspan=11>3x-ui не вернула ни одного сервера</td></tr>'
 def client_devices(email):
  items=[]
  try:
@@ -913,6 +933,42 @@ def client_devices(email):
 def client_usage(client):
  traffic=client.get('traffic') or {};used=int(client.get('usedTraffic') or 0) or int(traffic.get('up') or 0)+int(traffic.get('down') or 0);limit=int(client.get('totalGB') or traffic.get('total') or 0)
  return used,limit
+def inventory_xapi(path):
+ if not XUI_INVENTORY_URL:raise RuntimeError('URL управляющей 3x-ui не настроен')
+ if not XUI_INVENTORY_TOKEN:raise RuntimeError('API-токен управляющей 3x-ui не настроен')
+ req=urllib.request.Request(XUI_INVENTORY_URL+path,method='GET',headers={'Authorization':'Bearer '+XUI_INVENTORY_TOKEN,'Accept':'application/json'})
+ with urllib.request.urlopen(req,timeout=15) as response:return json.loads(response.read())
+def normalize_xui_inventory(master,nodes,clients=None,inbounds=None,master_name=None,master_country=None,master_flag=None,master_address=None):
+ now_ms=int(time.time()*1000);clients=clients if isinstance(clients,list) else [];inbounds=inbounds if isinstance(inbounds,list) else []
+ active=sum(1 for x in clients if isinstance(x,dict) and x.get('enable') and (not int(x.get('expiryTime') or 0) or int(x.get('expiryTime') or 0)>now_ms))
+ master_guid=str(master.get('panelGuid') or '');master_inbounds=[x for x in inbounds if isinstance(x,dict) and master_guid and str(x.get('originNodeGuid') or '')==master_guid];master_active_inbounds=sum(1 for x in master_inbounds if x.get('enable',True))
+ xray=master.get('xray') or {};mem=master.get('mem') or {};disk=master.get('disk') or {};net=master.get('netIO') or {};traffic=master.get('netTraffic') or {}
+ xray_state=str(xray.get('state') or master.get('xrayState') or 'unknown').lower();panel_online=bool(master)
+ master_online=panel_online and xray_state in ('online','running','active','true')
+ servers=[{'id':'master','name':master_name or XUI_INVENTORY_NAME,'country':master_country if master_country is not None else XUI_INVENTORY_COUNTRY,'flag':master_flag or XUI_INVENTORY_FLAG,'address':master_address or (urlparse(XUI_INVENTORY_URL).hostname or ''),'primary':True,'enabled':True,'panel_online':panel_online,'online':master_online,'connectable':master_online and master_active_inbounds>0,'status':'online' if panel_online else 'offline','xray_state':xray_state,'panel_version':str(master.get('panelVersion') or '—'),'xray_version':str(xray.get('version') or master.get('xrayVersion') or '—'),'cpu':round(float(master.get('cpu') or 0),1),'ram_percent':round(100*float(mem.get('current') or 0)/max(1,float(mem.get('total') or 1)),1),'disk_percent':round(100*float(disk.get('current') or 0)/max(1,float(disk.get('total') or 1)),1),'network_up':int(net.get('up') or 0),'network_down':int(net.get('down') or 0),'traffic_sent':int(traffic.get('sent') or 0),'traffic_received':int(traffic.get('recv') or 0),'active_users':active,'client_count':len(clients),'inbound_count':len(master_inbounds),'active_inbound_count':master_active_inbounds,'uptime':int(master.get('uptime') or 0),'latency_ms':0,'last_heartbeat':int(time.time())}]
+ for raw in nodes if isinstance(nodes,list) else []:
+  if not isinstance(raw,dict):continue
+  enabled=bool(raw.get('enable',True));status=str(raw.get('status') or 'unknown').lower();remote_xray=str(raw.get('xrayState') or 'unknown').lower();online=enabled and status=='online' and remote_xray in ('online','running','active','true')
+  remote_name=str(raw.get('name') or 'Нода 3x-ui')
+  inbound_count=int(raw.get('inboundCount') or 0)
+  servers.append({'id':'node-'+str(raw.get('guid') or raw.get('id') or len(servers)),'source_id':raw.get('id'),'name':remote_name,'country':remote_name.upper() if len(remote_name)<=3 else '','flag':node_flag(remote_name),'address':str(raw.get('address') or ''),'primary':False,'transitive':bool(raw.get('transitive')),'enabled':enabled,'panel_online':status=='online','online':online,'connectable':online and inbound_count>0,'status':'disabled' if not enabled else status,'xray_state':remote_xray,'panel_version':str(raw.get('panelVersion') or '—'),'xray_version':str(raw.get('xrayVersion') or '—'),'cpu':round(float(raw.get('cpuPct') or 0),1),'ram_percent':round(float(raw.get('memPct') or 0),1),'disk_percent':None,'network_up':int(raw.get('netUp') or 0),'network_down':int(raw.get('netDown') or 0),'traffic_sent':0,'traffic_received':0,'active_users':int(raw.get('onlineCount') or raw.get('activeCount') or 0),'client_count':int(raw.get('clientCount') or 0),'inbound_count':inbound_count,'active_inbound_count':inbound_count,'uptime':int(raw.get('uptimeSecs') or 0),'latency_ms':int(raw.get('latencyMs') or 0),'last_heartbeat':int(raw.get('lastHeartbeat') or 0),'config_dirty':bool(raw.get('configDirty'))})
+ return servers
+def xui_inventory(force=False):
+ now=time.monotonic()
+ with INVENTORY_LOCK:
+  if not force and INVENTORY_CACHE['expires']>now:return json.loads(json.dumps(INVENTORY_CACHE['servers']))
+  try:
+   master=inventory_xapi('/panel/api/server/status').get('obj') or {}
+   nodes=inventory_xapi('/panel/api/nodes/list').get('obj') or []
+   try:clients=inventory_xapi('/panel/api/clients/list').get('obj') or []
+   except Exception:clients=[]
+   try:inbounds=inventory_xapi('/panel/api/inbounds/list').get('obj') or []
+   except Exception:inbounds=[]
+   servers=normalize_xui_inventory(master,nodes,clients,inbounds)
+  except Exception as error:
+   servers=[{'id':'master','name':XUI_INVENTORY_NAME,'country':XUI_INVENTORY_COUNTRY,'flag':XUI_INVENTORY_FLAG,'address':urlparse(XUI_INVENTORY_URL).hostname or '','primary':True,'enabled':True,'panel_online':False,'online':False,'status':'offline','xray_state':'unknown','panel_version':'—','xray_version':'—','cpu':None,'ram_percent':None,'disk_percent':None,'network_up':0,'network_down':0,'traffic_sent':0,'traffic_received':0,'active_users':0,'client_count':0,'inbound_count':0,'uptime':0,'latency_ms':0,'last_heartbeat':0,'error':str(error)}]
+  INVENTORY_CACHE.update({'expires':now+15,'servers':servers})
+  return json.loads(json.dumps(servers))
 def node_metrics(node):
  item={'id':node.get('id'),'name':node.get('name'),'flag':node.get('flag','🌐'),'country':node.get('country',''),'weight':max(1,int(node.get('weight') or 100)),'accept_new':node.get('accept_new',True),'maintenance':node.get('maintenance',False),'online':False,'active_users':0}
  try:
@@ -931,17 +987,10 @@ def choose_node(connection=None):
  for item in candidates:item['pending_assignments']=pending.get(str(item['id']),0)
  return min(candidates,key=lambda x:((x.get('active_users',0)+x.get('pending_assignments',0)+1)/max(1,x.get('weight',100)),x.get('cpu',100)+x.get('ram_percent',100),str(x.get('id'))))['id']
 def status_data():
- out={'shop':'online','database':'online','panel':'offline','xray':'unknown','nodes':[],'primary':{'name':PRIMARY_NODE_NAME,'flag':PRIMARY_NODE_FLAG}}
- try:
-  s=xapi('GET','/panel/api/server/status').get('obj',{});out['panel']='online';out['xray']=s.get('xray',{}).get('state',s.get('xrayState','unknown'))
- except Exception as e:out['error']=str(e)
- for node in NODES:
-  if node is PRIMARY_NODE:continue
-  item={'id':node.get('id'),'name':node.get('name','Дополнительный сервер'),'country':node.get('country',''),'flag':node.get('flag','🌐'),'status':'offline','routes':node.get('routes') or []}
-  try:
-   state=node_xapi(node,'GET','/panel/api/server/status').get('obj',{});xray=state.get('xray',{}).get('state',state.get('xrayState','unknown'));item['status']='online' if str(xray).lower() in ('online','running','active','true') else 'offline'
-  except Exception as error:item['error']=str(error)
-  out['nodes'].append(item)
+ servers=xui_inventory();master=servers[0] if servers else {}
+ out={'shop':'online','database':'online','panel':'online' if master.get('panel_online') else 'offline','xray':master.get('xray_state','unknown'),'nodes':[],'primary':{'name':master.get('name',XUI_INVENTORY_NAME),'flag':master.get('flag',XUI_INVENTORY_FLAG)},'servers':servers}
+ if master.get('error'):out['error']=master['error']
+ for node in servers[1:]:out['nodes'].append({'id':node.get('id'),'name':node.get('name','Дополнительный сервер'),'country':node.get('country',''),'flag':node.get('flag','🌐'),'status':'online' if node.get('online') else node.get('status','offline'),'panel_version':node.get('panel_version'),'xray_version':node.get('xray_version'),'cpu':node.get('cpu'),'ram_percent':node.get('ram_percent'),'active_users':node.get('active_users',0)})
  return out
 def system_health_notice():
  data=system_health_data()
@@ -1441,7 +1490,7 @@ class H(BaseHTTPRequestHandler):
    if not self.isadmin():return self.sendx(403,'forbidden')
    bot_link=f'<a class=admin-link href="{html.escape(BOT_ADMIN_URL,quote=True)}" target=_blank rel=noopener>🤖 Telegram-бот<small>Параметры и состояние бота</small></a>' if BOT_ADMIN_URL else ''
    commerce='''<section class=settings-group><div><span class=eyebrow>Продажи</span><h2>Тарифы и оплата</h2><p>Всё, что видит клиент при выборе и оплате подписки.</p></div><div class=admin-link-grid><a class=admin-link href=/admin/tariffs>💰 Тарифы<small>Цены, сроки и промокоды для сайта и Telegram</small></a><a class=admin-link href=/admin/payment>💳 Способ оплаты<small>Ручное подтверждение или ЮKassa</small></a></div></section>'''
-   service='''<section class=settings-group><div><span class=eyebrow>Сервис</span><h2>Основные настройки</h2><p>Оформление, серверы и безопасность панели.</p></div><div class=admin-link-grid><a class=admin-link href=/admin/config>🎨 Сервис и узлы<small>Название, описание и параметры VPN-серверов</small></a><a class=admin-link href=/admin/servers>🖥 Состояние серверов<small>Нагрузка и режим обслуживания</small></a><a class=admin-link href=/settings/security>🔐 Безопасность<small>Пароль администратора и двухфакторная защита</small></a></div></section>'''
+   service='''<section class=settings-group><div><span class=eyebrow>Сервис</span><h2>Основные настройки</h2><p>Оформление, серверы и безопасность панели.</p></div><div class=admin-link-grid><a class=admin-link href=/admin/config>🎨 Сервис и узлы<small>Оформление и источник данных 3x-ui</small></a><a class=admin-link href=/admin/servers>🖥 VPN-серверы<small>Ноды, версии, доступность и нагрузка</small></a><a class=admin-link href=/settings/security>🔐 Безопасность<small>Пароль администратора и двухфакторная защита</small></a></div></section>'''
    communications=f'''<section class=settings-group><div><span class=eyebrow>Коммуникации</span><h2>Каналы связи</h2><p>Почта, Telegram и сообщения для пользователей.</p></div><div class=admin-link-grid><a class=admin-link href=/admin/mail>✉ Почта<small>Входящие письма и рассылки</small></a><a class=admin-link href=/admin/mail/settings>📨 Почтовый сервер<small>SMTP и IMAP</small></a>{bot_link}<a class=admin-link href=/admin/maintenance>🛠 Техработы<small>Объявления и уведомления</small></a></div></section>'''
    operations='''<section class=settings-group><div><span class=eyebrow>Эксплуатация</span><h2>Служебные функции</h2><p>Обращения пользователей и режим администратора.</p></div><div class=admin-link-grid><a class=admin-link href=/admin/guest-tickets>💬 Гостевые обращения<small>Сообщения без учётной записи</small></a><a class=admin-link href=/mode>👤 Режим работы<small>Переключение между администратором и пользователем</small></a></div></section>'''
    return self.sendx(200,page('Настройки',f'''<section class="hero admin-home-hero"><span class=eyebrow>Центр управления</span><h1>Настройки</h1><p>Все параметры сервиса собраны по назначению. Изменения тарифов применяются одновременно на сайте и в Telegram-боте.</p></section>{commerce}{service}{communications}{operations}''',True))
@@ -1456,35 +1505,18 @@ class H(BaseHTTPRequestHandler):
   if p=='/admin/config':
    if not self.isadmin():return self.sendx(403,'forbidden')
    cfg=json.loads(json.dumps(CONFIG));branding=cfg.get('branding') or {}
-   flag_catalog=[('🌐','Другое / без страны'),('🇷🇺','Россия'),('🇵🇱','Польша'),('🇫🇮','Финляндия'),('🇸🇪','Швеция'),('🇳🇱','Нидерланды'),('🇩🇪','Германия'),('🇫🇷','Франция'),('🇬🇧','Великобритания'),('🇺🇸','США'),('🇨🇦','Канада'),('🇨🇭','Швейцария'),('🇪🇪','Эстония'),('🇱🇻','Латвия'),('🇱🇹','Литва'),('🇨🇿','Чехия'),('🇦🇹','Австрия'),('🇪🇸','Испания'),('🇮🇹','Италия'),('🇹🇷','Турция'),('🇯🇵','Япония'),('🇸🇬','Сингапур')]
-   def flag_select(selected):
-    selected=str(selected or '🌐');items=list(flag_catalog)
-    if selected not in {x[0] for x in items}:items.insert(0,(selected,'Текущий пользовательский флаг'))
-    return ''.join(f'<option value="{html.escape(flag,quote=True)}" {"selected" if flag==selected else ""}>{html.escape(flag)} {html.escape(label)}</option>' for flag,label in items)
    branding_form=f'''<div class=card><h2>Название и описание</h2><form method=post action=/admin/config/branding><label>Название</label><input name=name maxlength=40 value="{html.escape(str(branding.get('name','HOME-VPN')),quote=True)}" required><label>Слоган</label><input name=tagline maxlength=80 value="{html.escape(str(branding.get('tagline','Домашняя свобода')),quote=True)}"><label>Подзаголовок</label><input name=subtitle maxlength=120 value="{html.escape(str(branding.get('subtitle','Безопасный интернет каждый день')),quote=True)}"><button class=btn>Сохранить оформление</button></form></div>'''
-   node_forms=[]
-   for index,node in enumerate(cfg.get('nodes') or []):
-    routes='\n'.join('|'.join((str(r.get('name','')),str(r.get('inbound_id','')),str(r.get('protocol','vless')),str(r.get('transport','tcp')))) for r in node.get('routes') or []);inbounds=','.join(map(str,node.get('inbound_ids') or []))
-    delete='' if node.get('primary') else f'''<form method=post action=/admin/config/node/delete onsubmit="return confirm('Удалить ноду {html.escape(str(node.get('name','')))} из конфигурации?')"><input type=hidden name=index value={index}><button class=delbtn>Удалить ноду</button></form>'''
-    sync=f'''<form method=post action=/admin/config/node/sync><input type=hidden name=index value={index}><button class="btn soft">↻ Получить inbound и маршруты из 3x-ui</button></form>'''
-    node_forms.append(f'''<div class=card><h2>{'⭐ ' if node.get('primary') else ''}{html.escape(str(node.get('name','Нода')))}</h2><form method=post action=/admin/config/node><input type=hidden name=index value={index}><label>ID</label><input name=node_id value="{html.escape(str(node.get('id','')),quote=True)}" required><label>Название</label><input name=name value="{html.escape(str(node.get('name','')),quote=True)}" required><label>Страна</label><input name=country value="{html.escape(str(node.get('country','')),quote=True)}"><label>Флаг</label><select name=flag>{flag_select(node.get('flag','🌐'))}</select><label>URL API 3x-ui</label><input name=panel_url value="{html.escape(str(node.get('panel_url','')),quote=True)}"><label>Переменная окружения с API-токеном</label><input name=token_env value="{html.escape(str(node.get('token_env','XUI_TOKEN')),quote=True)}" readonly><small>Секрет хранится только в /etc/vpn-shop.env. После добавления ноды нажмите синхронизацию.</small><label>Inbound ID через запятую</label><input name=inbound_ids value="{html.escape(inbounds,quote=True)}"><label>Существующий домен подписки</label><input name=subscription_base_url value="{html.escape(str(node.get('subscription_base_url','')),quote=True)}"><label>Вес при распределении</label><input type=number min=1 max=100 name=weight value="{int(node.get('weight',100))}"><label>Маршруты</label><textarea name=routes placeholder="reality|1|vless|tcp">{html.escape(routes)}</textarea><label><input type=checkbox name=primary value=1 {'checked' if node.get('primary') else ''}> Основная нода</label><label><input type=checkbox name=enabled value=1 {'checked' if node.get('enabled',True) else ''}> Включена</label><label><input type=checkbox name=accept_new value=1 {'checked' if node.get('accept_new',True) else ''}> Выдавать новым пользователям</label><label><input type=checkbox name=maintenance value=1 {'checked' if node.get('maintenance',False) else ''}> Техническое обслуживание</label><button class=btn>Сохранить ноду</button></form>{sync}{delete}</div>''')
-   new_node=f'''<div class=card><h2>Добавить сервер</h2><form method=post action=/admin/config/node><input type=hidden name=index value=new><label>ID</label><input name=node_id placeholder=foreign-2 required><label>Название</label><input name=name placeholder="Зарубежная нода 2" required><label>Страна</label><input name=country placeholder=DE><label>Флаг</label><select name=flag>{flag_select('🌐')}</select><label>URL API</label><input name=panel_url placeholder="https://node2.my.domain.ru:2053/panel-path"><label>Переменная окружения с API-токеном</label><input name=token_env placeholder=FOREIGN_2_XUI_TOKEN><label>Inbound ID через запятую</label><input name=inbound_ids placeholder=1,2,3><label>Вес при распределении</label><input type=number min=1 max=100 name=weight value=100><label>Маршруты</label><textarea name=routes placeholder="reality|1|vless|tcp&#10;xhttp|2|vless|xhttp"></textarea><label><input type=checkbox name=enabled value=1 checked> Включен</label><label><input type=checkbox name=accept_new value=1 checked> Выдавать новым пользователям</label><button class=btn>Добавить сервер</button></form></div>'''
    params=parse_qs(urlparse(self.path).query);notice='<div class=notice>Настройки сохранены и уже применены.</div>' if params.get('saved') else ''
-   return self.sendx(200,page('Сервис и узлы',f'''<section class=hero><span class=eyebrow>Настройки · Сервис</span><h1>Сервис и VPN-узлы</h1><p>Оформление сайта и технические параметры серверов. Тарифы и оплата вынесены в отдельную понятную группу.</p><a class="btn soft" href=/admin/settings>← Все настройки</a></section>{notice}<div class=manual>{branding_form}</div><h2 id=servers>VPN-серверы</h2><div class=manual>{''.join(node_forms)}{new_node}</div>''',True))
+   servers=xui_inventory();server_block=f'''<div class=card><h2>Узлы из 3x-ui</h2><p>Список формируется автоматически управляющей панелью. Добавляйте, отключайте и переименовывайте ноды в 3x-ui — ручное дублирование в HOME-VPN отключено.</p><p><b>Обнаружено серверов: {len(servers)}</b></p><a class=btn href=/admin/servers>Открыть состояние и нагрузку</a></div>'''
+   return self.sendx(200,page('Сервис и узлы',f'''<section class=hero><span class=eyebrow>Настройки · Сервис</span><h1>Сервис и VPN-узлы</h1><p>Оформление сайта редактируется здесь, а полный список серверов автоматически поступает из управляющей 3x-ui.</p><a class="btn soft" href=/admin/settings>← Все настройки</a></section>{notice}<div class=manual>{branding_form}{server_block}</div>''',True))
   if p=='/admin/status':
    if not self.isadmin():return self.sendx(403,'forbidden')
-   s=status_data();primary_ok=str(s.get('panel')).lower()=='online' and str(s.get('xray')).lower() in ('online','running','active','true')
-   rows=f"<tr><td>{PRIMARY_NODE_FLAG} {html.escape(PRIMARY_NODE_NAME)}</td><td>{badge('online' if primary_ok else 'offline')}</td><td>3x-ui: {badge(s.get('panel'))} · Xray: {badge(s.get('xray'))}</td></tr>"
-   rows+=''.join(f"<tr><td>{html.escape(str(n.get('flag') or node_flag(n.get('name'))))} {html.escape(str(n.get('name','Дополнительный сервер')))}</td><td>{badge(n.get('status'))}</td><td>Дополнительная нода</td></tr>" for n in s.get('nodes',[]))
-   return self.sendx(200,page('Мониторинг серверов',f"<section class=hero><h1>Мониторинг серверов</h1><p>Состояние основной панели, Xray и дополнительных узлов.</p></section><div class=card><div class=tablewrap><table><tr><th>Узел</th><th>Состояние</th><th>Компоненты</th></tr>{rows}</table></div></div>",True))
+   servers=xui_inventory(force=True);rows=inventory_table(servers)
+   return self.sendx(200,page('Мониторинг серверов',f"<section class=hero><h1>Мониторинг серверов</h1><p>Автоматическая сводка управляющей 3x-ui: главная панель и все подключённые к ней ноды.</p></section><div class=card><div class=tablewrap><table><tr><th>Узел</th><th>Состояние</th><th>3x-ui / Xray</th><th>CPU</th><th>RAM</th><th>Диск</th><th>Сеть сейчас</th><th>Онлайн / клиентов</th><th>Inbounds активн. / всего</th><th>Задержка / heartbeat</th><th>Uptime</th></tr>{rows}</table></div></div>",True))
   if p=='/admin/servers':
    if not self.isadmin():return self.sendx(403,'forbidden')
-   metrics=[node_metrics(node) for node in NODES];rows=''
-   for node in metrics:
-    state=badge('online' if node.get('online') else 'offline');mode='Обслуживание' if node.get('maintenance') else ('Новых не принимать' if not node.get('accept_new') else 'Принимает новых')
-    rows+=f'''<tr><td><b>{html.escape(node['flag'])} {html.escape(str(node['name']))}</b><br><small>{html.escape(str(node['country']))}</small></td><td>{state}<br>{mode}</td><td>{node.get('cpu','—')}%</td><td>{node.get('ram_percent','—')}%</td><td>{node.get('disk_percent','—')}%</td><td>{format_bytes(node.get('network_down',0))} ↓ / {format_bytes(node.get('network_up',0))} ↑</td><td>{node.get('active_users',0)}</td><td>{format_bytes(node.get('traffic_received',0)+node.get('traffic_sent',0))}</td><td>{node.get('weight',100)}</td></tr>'''
-   actions='''<div class=card><h2>Массовое обслуживание</h2><p>Режим обслуживания исключает узлы из автоматической выдачи новым пользователям. Действующие подписки не удаляются.</p><div class=admin-actions><form method=post action=/admin/servers/mass><input type=hidden name=action value=maintenance_on><button class=delbtn>Начать обслуживание всех узлов</button></form><form method=post action=/admin/servers/mass><input type=hidden name=action value=maintenance_off><button class=approvebtn>Завершить обслуживание</button></form><a class=navbtn href=/admin/config#servers>Изменить параметры узлов</a></div></div>'''
-   return self.sendx(200,page('Управление серверами',f'''<section class=hero><h1>Управление серверами</h1><p>Новые пользователи автоматически получают предпочтительный узел с учётом нагрузки, веса и режима обслуживания.</p></section><div class=card><div class=tablewrap><table><tr><th>Страна / узел</th><th>Доступность</th><th>CPU</th><th>RAM</th><th>Диск</th><th>Сеть сейчас</th><th>Активные</th><th>Трафик узла</th><th>Вес</th></tr>{rows}</table></div></div><br>{actions}''',True))
+   servers=xui_inventory(force=True);rows=inventory_table(servers)
+   return self.sendx(200,page('VPN-серверы',f'''<section class=hero><h1>VPN-серверы</h1><p>Главная нода и дочерние серверы загружаются напрямую из 3x-ui. Данные обновляются при открытии страницы.</p></section><div class="callout ok"><b>Источник данных: управляющая 3x-ui</b><p>Ручное добавление серверов в HOME-VPN отключено. Управляйте составом нод в панели 3x-ui.</p></div><div class=card><div class=tablewrap><table><tr><th>Узел</th><th>Состояние</th><th>3x-ui / Xray</th><th>CPU</th><th>RAM</th><th>Диск</th><th>Сеть сейчас</th><th>Онлайн / клиентов</th><th>Inbounds активн. / всего</th><th>Задержка / heartbeat</th><th>Uptime</th></tr>{rows}</table></div></div>''',True))
   if p=='/admin/maintenance':
    if not self.isadmin():return self.sendx(403,'forbidden')
    with db() as c:notices=c.execute('SELECT *, (SELECT count(*) FROM maintenance_deliveries d WHERE d.notice_id=maintenance_notices.id) delivered FROM maintenance_notices ORDER BY id DESC LIMIT 50').fetchall()
@@ -1496,11 +1528,7 @@ class H(BaseHTTPRequestHandler):
    forms="""<div class=card><h2>Создать уведомление</h2><form method=post action=/admin/maintenance/start><label>Тип работ</label><select name=kind><option value=unplanned>Внеплановые</option><option value=planned>Плановые</option></select><label>Сообщение и сроки</label><textarea name=message minlength=5 maxlength=2000 required placeholder="Опишите работы и укажите сроки"></textarea><button class=btn>Опубликовать уведомление</button></form><div class=admin-actions><form method=post action=/admin/maintenance/complete onsubmit="return confirm('Завершить все активные уведомления?')"><button class=approvebtn>Завершить активные работы</button></form><form method=post action=/admin/maintenance/clear onsubmit="return confirm('Удалить всю историю завершённых технических работ? Это действие нельзя отменить.')"><button class=delbtn>Очистить завершённые</button></form></div></div>"""
    return self.sendx(200,page('Технические работы',f"<section class=hero><h1>Технические работы</h1><p>Уведомление появится на сайте и будет отправлено ботом активным подписчикам.</p></section>{forms}<br><div class=card><h2>История уведомлений</h2><div class=tablewrap><table><tr><th>ID</th><th>Тип</th><th>Сообщение</th><th>Статус</th><th>Доставлено</th><th>Создано</th><th>Действие</th></tr>{rows}</table></div></div>",True))
   if p=='/status':
-   s=status_data();primary_ok=str(s.get('panel')).lower()=='online' and str(s.get('xray')).lower() in ('online','running','active','true')
-   def server_row(name,state,flag='🌐'):
-    working=str(state).lower() in ('online','running','active','true');message='Можно подключаться к этому серверу.' if working else 'Сервер временно недоступен. Выберите другой сервер.'
-    return f"<tr><td class=table-title>{html.escape(flag)} {html.escape(str(name))}</td><td>{badge('online' if working else 'offline')}</td><td>{message}</td></tr>"
-   server_rows=server_row(PRIMARY_NODE_NAME,primary_ok,PRIMARY_NODE_FLAG)+''.join(server_row(n.get('name','Дополнительный сервер'),n.get('status'),n.get('flag') or node_flag(n.get('name'))) for n in s['nodes'])
+   server_rows=inventory_table(xui_inventory(),public=True)
    return self.sendx(200,page('Статус серверов',f'<section class=hero><h1>Статус серверов</h1><p>Здесь показано, к каким серверам сейчас можно подключиться.</p></section><div class=card><div class=tablewrap><table class=catalog-table><tr><th>Сервер</th><th>Статус</th><th>Описание</th></tr>{server_rows}</table></div></div><div class=callout>Если выбранный сервер не работает, откройте HAPP и выберите другой сервер со статусом <b>«Работает»</b>.</div>'))
   if p=='/notifications':
    if not self.need():return
@@ -2225,6 +2253,9 @@ class H(BaseHTTPRequestHandler):
     save_runtime_config(cfg)
    except Exception as error:return self.sendx(400,page('Ошибка настройки',f'<div class="card box"><h2 class=err>Не удалось сохранить тарифы</h2><p>{html.escape(str(error))}</p><a class=btn href=/admin/config>Вернуться</a></div>',True))
    return self.redir('/admin/config?saved=1')
+  if p in ('/admin/config/node','/admin/config/node/delete','/admin/config/node/sync','/admin/servers/mass'):
+   if not self.isadmin():return self.sendx(403,'forbidden')
+   return self.sendx(410,page('Управление перенесено в 3x-ui','<div class="card box"><h2>Ручное управление VPN-серверами отключено</h2><p>HOME-VPN автоматически получает главную ноду, дочерние ноды, их состояние, версии и нагрузку из управляющей панели 3x-ui.</p><a class=btn href=/admin/servers>Открыть VPN-серверы</a></div>',True))
   if p=='/admin/config/node':
    if not self.isadmin():return self.sendx(403,'forbidden')
    try:
