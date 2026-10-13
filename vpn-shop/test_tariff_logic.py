@@ -15,6 +15,17 @@ SPEC.loader.exec_module(APP)
 
 
 class TariffPriceTests(unittest.TestCase):
+    def test_mtproto_link_uses_public_443_without_changing_secret(self):
+        old_host,old_port=APP.MTPROTO_PUBLIC_HOST,APP.MTPROTO_PUBLIC_PORT
+        try:
+            APP.MTPROTO_PUBLIC_HOST='pl-panel.home3000.org';APP.MTPROTO_PUBLIC_PORT=443
+            link=APP.mtproto_public_link('tg://proxy?server=127.0.0.1&port=10445&secret=ee0123')
+            params=APP.parse_qs(APP.urlparse(link).query)
+            self.assertEqual(params['server'],['pl-panel.home3000.org'])
+            self.assertEqual(params['port'],['443'])
+            self.assertEqual(params['secret'],['ee0123'])
+        finally:APP.MTPROTO_PUBLIC_HOST,APP.MTPROTO_PUBLIC_PORT=old_host,old_port
+
     def test_runtime_configuration_changes_prices_devices_traffic_and_nodes(self):
         original=json.loads(json.dumps(APP.CONFIG));changed=json.loads(json.dumps(APP.CONFIG))
         try:

@@ -7,7 +7,7 @@ from email.message import EmailMessage
 from email.parser import BytesParser
 from email.utils import parseaddr
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
-from urllib.parse import parse_qs,quote,urlparse
+from urllib.parse import parse_qs,quote,urlencode,urlparse
 DB=os.getenv('VPN_SHOP_DB','/var/lib/vpn-shop/shop.db'); PORT=int(os.getenv('APP_PORT','8080'));BIND=os.getenv('APP_BIND','127.0.0.1');APP_ENV=os.getenv('APP_ENV','production').strip().lower()
 TLS_CERT=os.getenv('TLS_CERT','').strip();TLS_KEY=os.getenv('TLS_KEY','').strip()
 ASSET_ROOT=pathlib.Path(os.getenv('ASSET_ROOT','/srv/home-vpn/assets')).resolve();DOWNLOAD_ROOT=pathlib.Path(os.getenv('DOWNLOAD_ROOT','/srv/home-vpn/downloads')).resolve()
@@ -430,6 +430,11 @@ def mtproto_xapi(method,path,body=None):
  if not MTPROTO_XUI_URL or not MTPROTO_XUI_TOKEN:raise RuntimeError('API MTProto-ноды не настроен')
  req=urllib.request.Request(MTPROTO_XUI_URL+path,data=json.dumps(body).encode() if body is not None else None,method=method,headers={'Authorization':'Bearer '+MTPROTO_XUI_TOKEN,'Content-Type':'application/json'})
  with urllib.request.urlopen(req,timeout=15) as response:return json.loads(response.read())
+def mtproto_public_link(link):
+ parsed=urlparse(str(link or ''))
+ if parsed.scheme not in ('tg','https') or not MTPROTO_PUBLIC_HOST or not MTPROTO_PUBLIC_PORT:return str(link or '')
+ query=parse_qs(parsed.query,keep_blank_values=True);query['server']=[MTPROTO_PUBLIC_HOST];query['port']=[str(MTPROTO_PUBLIC_PORT)]
+ return parsed._replace(query=urlencode(query,doseq=True)).geturl()
 def discover_node_routes(node):
  result=node_xapi(node,'GET','/panel/api/inbounds/list');items=result.get('obj') or []
  if not result.get('success',True):raise RuntimeError(str(result.get('msg') or '3x-ui вернула ошибку'))
@@ -515,6 +520,7 @@ def emergency_mtproto_access(telegram_id):
   links=mtproto_xapi('GET','/panel/api/clients/links/'+quote(email)).get('obj') or []
   link=next((str(x) for x in links if str(x).startswith(('tg://proxy?','https://t.me/proxy?'))),None)
   if not link:raise RuntimeError('3x-ui не вернула MTProto-ссылку')
+  link=mtproto_public_link(link)
  except urllib.error.HTTPError as error:raise RuntimeError(f'3x-ui HTTP {error.code}') from None
  expires_at=0 if expiry_ms==0 else expiry_ms//1000;cooldown=0 if subscriber else (int(record['cooldown_until']) if record else now+MTPROTO_COOLDOWN_SECONDS)
  with db() as c:c.execute('INSERT INTO emergency_mtproto(telegram_id,client_email,first_issued_at,last_issued_at,expires_at,cooldown_until,subscriber) VALUES(?,?,?,?,?,?,?) ON CONFLICT(telegram_id) DO UPDATE SET last_issued_at=excluded.last_issued_at,expires_at=excluded.expires_at,cooldown_until=excluded.cooldown_until,subscriber=excluded.subscriber',(telegram_id,email,int(record['first_issued_at']) if record else now,now,expires_at,cooldown,1 if subscriber else 0))
@@ -543,6 +549,7 @@ def emergency_web_access(device_value,ip_address):
   with db() as c:c.execute('INSERT INTO emergency_mtproto_web(device_hash,ip_hash,claim_token,client_email,issued_at,expires_at,cooldown_until) VALUES(?,?,?,?,?,?,?) ON CONFLICT(device_hash) DO UPDATE SET ip_hash=excluded.ip_hash,claim_token=excluded.claim_token,client_email=excluded.client_email,issued_at=excluded.issued_at,expires_at=excluded.expires_at,cooldown_until=excluded.cooldown_until,telegram_id=NULL',(device_hash,ip_hash,claim,email,now,expires_at,cooldown))
  links=mtproto_xapi('GET','/panel/api/clients/links/'+quote(email)).get('obj') or [];link=next((str(x) for x in links if str(x).startswith(('tg://proxy?','https://t.me/proxy?'))),None)
  if not link:raise RuntimeError('3x-ui не вернула MTProto-ссылку')
+ link=mtproto_public_link(link)
  return {'link':link,'claim_token':claim,'expires_at':expires_at,'cooldown_until':cooldown}
 def claim_emergency_web(token,telegram_id):
  now=int(time.time());telegram_id=int(telegram_id)
